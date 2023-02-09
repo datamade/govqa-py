@@ -1,52 +1,92 @@
+"""
+https://stackoverflow.com/questions/54927385/scrape-aspx-form-with-python
+"""
+import re
+
+import lxml.html
 from scrapelib import Scraper
 
 
 class GovQA(Scraper):
-
-	# S(hash) is an auto-generated session id – you can start with whatever in S(foo) and it will redirect to a
-	# valid session id
-	SCREENS = {
-		"HOME": "https://chicagoil.govqa.us/WEBAPP/_rs/(S(avkc0dc23pt3ekhsam5lecoa))/SupportHome.aspx",
-		"LOG_IN": "https://chicagoil.govqa.us/WEBAPP/_rs/(S(avkc0dc23pt3ekhsam5lecoa))/Login.aspx",
-		"CREATE_ACCOUNT": "https://chicagoil.govqa.us/WEBAPP/_rs/(S(avkc0dc23pt3ekhsam5lecoa))/CustomerDetails.aspx"
+	"""
+	ENDPOINTS = {
+		"home": "SupportHome.aspx",
+		"login": "Login.aspx",
+		"create_account": "CustomerDetails.aspx"
 	}
+	"""
 
-"""
-GET https://chicagoil.govqa.us/WEBAPP/_rs/(S(lcwowhduu5obtbicm53kcofp))/SupportHome.aspx
+	def __init__(self, domain, *args, **kwargs):
+		super().__init__(*args, **kwargs)
 
-GET https://chicagoil.govqa.us/WEBAPP/_rs/(S(avkc0dc23pt3ekhsam5lecoa))/Login.aspx
+		self.domain = domain
 
-	GET a[@id="lnkCreateUser"] -> href
+		response = self.get(
+			self.get_full_url("SupportHome.aspx", session_token="initial request")
+		)
 
-GET https://chicagoil.govqa.us/WEBAPP/_rs/(S(avkc0dc23pt3ekhsam5lecoa))/CustomerDetails.aspx
+		self.session_token = re.search(
+			r"^.*\(S\((?P<session_id>.*)\){2}.*$", response.url
+		).group("session_id")
 
-	sSessionID=
-	new=1
-	target=YpURA3m6cNU+N1K9kEqQhsrfcDJG9Ka8RWiy1M8DmiH7DCBh2zM3lwy8FVOXbT85OAivQa7Mg/79jh5erufutULr4aDy8MywN9uXgWeZm5XbH2bkP6op/sOHh5EWlh7hWdimVw/ssZAf9BnrYGhyDudfLIUWESe3lZNVf0X4zxJTB6DWi9T768DacazgxnE1
+	def get_full_url(self, endpoint, session_token=None):
+		"""
+		S(hash) is an auto-generated session id – you can start with whatever in S(foo) and
+		it will redirect to a valid session id.
+		"""
+		return f"{self.domain}/WEBAPP/_rs/(S({session_token if session_token else self.session_token}))/{endpoint}"
 
-"""
-
-	def create_account():
+	def create_account(self):
 		...
 
-	def log_in():
-		self.get()
+	def login(self, username, password):
+		login_page = self.get_full_url("Login.aspx")
+		response = self.get(login_page)
+
+		# Scrape state values
+		tree = lxml.html.fromstring(response.text)
+
+		viewstate = tree.xpath("//input[@id='__VIEWSTATE']")[0].value
+		viewstategenerator = tree.xpath("//input[@id='__VIEWSTATEGENERATOR']")[
+            0
+        ].value
+
+		return self.post(
+			self.get_full_url(login_page),
+			data={
+				"__VIEWSTATE": viewstate,
+				"__VIEWSTATEGENERATOR": viewstategenerator,
+				"ASPxFormLayout1$txtUsername": username,
+				"ASPxFormLayout1$txtPassword:": password,
+				"ASPxFormLayout1$btnLogin": "Submit"
+			}
+		)
+
+	def request(self, *args, **kwargs):
+		response = super().request(*args, **kwargs)
+
+		if "There was a problem serving the requested page" in response.text:
+			response.status_code = 500
+
+		elif "Page Temporarily Unavailable" in response.text:
+			response.status_code = 500
+
+		return response
+
+	def reset_password(self):
 		...
 
-	def reset_password():
+	def submit_request(self):
 		...
 
-	def submit_request():
+	def submit_request_attachments(self):
 		...
 
-	def submit_request_attachments():
+	def retrieve_message(self):
 		...
 
-	def retrieve_message():
+	def send_message(self):
 		...
 
-	def send_message():
-
-	def retrieve_request_response():
+	def retrieve_request_response(self):
 		...
-
