@@ -16,6 +16,16 @@ class GovQA(Scraper):
 	}
 	"""
 
+	@property
+	def base_headers(self):
+		{
+	        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/40.0.2214.115 Safari/537.36",
+	        "Content-Type": "application/x-www-form-urlencoded",
+	        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+	        "Accept-Encoding": "gzip, deflate, br",
+	        "Accept-Language": "en-US,en;q=0.9"
+	    }
+
 	def __init__(self, domain, *args, **kwargs):
 		super().__init__(*args, **kwargs)
 
@@ -41,7 +51,7 @@ class GovQA(Scraper):
 
 	def login(self, username, password):
 		login_page = self.get_full_url("Login.aspx")
-		response = self.get(login_page)
+		response = self.get(login_page, headers=...)
 
 		# Scrape state values
 		tree = lxml.html.fromstring(response.text)
