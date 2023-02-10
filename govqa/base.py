@@ -1,6 +1,9 @@
 """
 https://stackoverflow.com/questions/54927385/scrape-aspx-form-with-python
 """
+from datetime import datetime
+from hashlib import md5
+import os
 import re
 
 import lxml.html
@@ -8,95 +11,118 @@ from scrapelib import Scraper
 
 
 class GovQA(Scraper):
-	"""
-	ENDPOINTS = {
-		"home": "SupportHome.aspx",
-		"login": "Login.aspx",
-		"create_account": "CustomerDetails.aspx"
-	}
-	"""
+    """
+    ENDPOINTS = {
+        "home": "SupportHome.aspx",
+        "login": "Login.aspx",
+        "create_account": "CustomerDetails.aspx"
+        "logged_in_home": "CustomerHome.aspx",
+    }
+    """
 
-	@property
-	def base_headers(self):
-		{
-	        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/40.0.2214.115 Safari/537.36",
-	        "Content-Type": "application/x-www-form-urlencoded",
-	        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-	        "Accept-Encoding": "gzip, deflate, br",
-	        "Accept-Language": "en-US,en;q=0.9"
-	    }
+    @property
+    def BASE_HEADERS(self):
+        return {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:12.0) Gecko/20100101 Firefox/12.0",
+            "Accept-Language": "en-US",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        }
 
-	def __init__(self, domain, *args, **kwargs):
-		super().__init__(*args, **kwargs)
+    def __init__(self, domain, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-		self.domain = domain
+        self.domain = domain
 
-		response = self.get(
-			self.get_full_url("SupportHome.aspx", session_token="initial request")
-		)
+        # Generate a 25-character hash to use as a token for this session
+        self.session_token = md5(
+            datetime.now().isoformat().encode()
+        ).hexdigest()[:24]
 
-		self.session_token = re.search(
-			r"^.*\(S\((?P<session_id>.*)\){2}.*$", response.url
-		).group("session_id")
+    def request(self, *args, **kwargs):
+        response = super().request(*args, **kwargs)
 
-	def get_full_url(self, endpoint, session_token=None):
-		"""
-		S(hash) is an auto-generated session id – you can start with whatever in S(foo) and
-		it will redirect to a valid session id.
-		"""
-		return f"{self.domain}/WEBAPP/_rs/(S({session_token if session_token else self.session_token}))/{endpoint}"
+        if "There was a problem serving the requested page" in response.text:
+            response.status_code = 500
 
-	def create_account(self):
-		...
+        elif "Page Temporarily Unavailable" in response.text:
+            response.status_code = 500
 
-	def login(self, username, password):
-		login_page = self.get_full_url("Login.aspx")
-		response = self.get(login_page, headers=...)
+        return response
 
-		# Scrape state values
-		tree = lxml.html.fromstring(response.text)
+    def get_full_url(self, endpoint):
+        return f"{self.domain}/WEBAPP/_rs/(S({self.session_token}))/{endpoint}"
 
-		viewstate = tree.xpath("//input[@id='__VIEWSTATE']")[0].value
-		viewstategenerator = tree.xpath("//input[@id='__VIEWSTATEGENERATOR']")[
+    def create_account(self):
+        ...
+
+    def login(self, username, password):
+        # TODO: Add base headers in request method
+        login_headers = self.BASE_HEADERS.copy()
+        login_headers["Referer"] = self.get_full_url("SupportHome.aspx")
+
+        login_url = self.get_full_url("Login.aspx")
+
+        response = self.get(
+            login_url,
+            headers=login_headers
+        )
+
+        tree = lxml.html.fromstring(response.text)
+
+        # TODO: Get sSessionID?
+
+        viewstate = tree.xpath("//input[@id='__VIEWSTATE']")[0].value
+        viewstategenerator = tree.xpath("//input[@id='__VIEWSTATEGENERATOR']")[
             0
         ].value
+        request_verification_token =  tree.xpath("//input[@name='__RequestVerificationToken']")[0].value
 
-		return self.post(
-			self.get_full_url(login_page),
-			data={
-				"__VIEWSTATE": viewstate,
-				"__VIEWSTATEGENERATOR": viewstategenerator,
-				"ASPxFormLayout1$txtUsername": username,
-				"ASPxFormLayout1$txtPassword:": password,
-				"ASPxFormLayout1$btnLogin": "Submit"
-			}
-		)
+        login_headers["Referer"] = login_url
+        login_headers["Content-Type"] = "application/x-www-form-urlencoded"
 
-	def request(self, *args, **kwargs):
-		response = super().request(*args, **kwargs)
+        # TODO: Add cookie?
 
-		if "There was a problem serving the requested page" in response.text:
-			response.status_code = 500
+        payload = {
+            "__VIEWSTATE": viewstate,
+            "__VIEWSTATEGENERATOR": viewstategenerator,
+            "__EVENTTARGET": None,
+            "__EVENTARGUMENT": None,
+            "__RequestVerificationToken": request_verification_token,
+            "ASPxFormLayout1$txtUsername": username,
+            "ASPxFormLayout1$txtPassword:": password,
+            "ASPxFormLayout1$btnLogin": "Submit",
+        }
 
-		elif "Page Temporarily Unavailable" in response.text:
-			response.status_code = 500
+        return client.post(
+            login_url,
+            headers=login_headers,
+            data=payload,
+        )
 
-		return response
+    def reset_password(self):
+        ...
 
-	def reset_password(self):
-		...
+    def submit_request(self):
+        ...
 
-	def submit_request(self):
-		...
+    def submit_request_attachments(self):
+        ...
 
-	def submit_request_attachments(self):
-		...
+    def retrieve_message(self):
+        ...
 
-	def retrieve_message(self):
-		...
+    def send_message(self):
+        ...
 
-	def send_message(self):
-		...
+    def retrieve_request_response(self):
+        ...
 
-	def retrieve_request_response(self):
-		...
+
+if __name__ == "__main__":
+    client = GovQA(os.environ["GOVQA_DOMAIN"])
+
+    response = client.login(os.environ["GOVQA_USERNAME"], os.environ["GOVQA_PASSWORD"])
+
+    import pdb
+    pdb.set_trace()
