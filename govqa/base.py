@@ -14,13 +14,17 @@ class GovQA(Scraper):
         "login": "Login.aspx",
         "create_account": "CustomerDetails.aspx"
         "logged_in_home": "CustomerHome.aspx",
+        "messages": "CustomerIssues.aspx",
+        "message": "RequestEdit.aspx",
     }
     """
 
-    def __init__(self, domain, *args, **kwargs):
+    def __init__(self, domain, username, password, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.domain = domain
+        self.username = username
+        self.password = password
 
     def request(self, *args, **kwargs):
         response = super().request(*args, **kwargs)
@@ -39,14 +43,14 @@ class GovQA(Scraper):
     def create_account(self):
         ...
 
-    def login(self, username, password):
+    def login(self):
         headers = {
             "user-agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Mobile Safari/537.36",
         }
 
         response = self.get(
             self.url_from_endpoint("Login.aspx"),
-            headers=login_headers,
+            headers=headers,
             allow_redirects=True,
         )
 
@@ -65,8 +69,8 @@ class GovQA(Scraper):
             "__EVENTARGUMENT": "",
             "__VIEWSTATE": viewstate,
             "__RequestVerificationToken": request_verification_token,
-            "ASPxFormLayout1$txtUsername": username,
-            "ASPxFormLayout1$txtPassword": password,
+            "ASPxFormLayout1$txtUsername": self.username,
+            "ASPxFormLayout1$txtPassword": self.password,
             "ASPxFormLayout1$btnLogin": "Submit",
             "__VIEWSTATEGENERATOR": viewstategenerator,
             "__VIEWSTATEENCRYPTED": "",
@@ -83,25 +87,79 @@ class GovQA(Scraper):
         ...
 
     def submit_request(self):
+        """
+        Text and attachments
+        """
         ...
 
-    def submit_request_attachments(self):
+    def update_request(self, request_id):
         ...
 
-    def retrieve_message(self):
+    def list_requests(self):
+        self.login()
+
+        response = self.get(
+            self.url_from_endpoint("CustomerIssues.aspx"),
+            params={"rid": request_id}
+        )
+
+        tree = lxml.html.fromstring(response.text)
+
+        request_links = tree.xpath("//a[contains(@id, 'referenceLnk')]")
+
         ...
 
-    def send_message(self):
-        ...
+    def get_request(self, request_id):
+        self.login()
 
-    def retrieve_request_response(self):
+        response = self.get(
+            self.url_from_endpoint("RequestEdit.aspx"),
+            params={"rid": request_id}
+        )
+
+        tree = lxml.html.fromstring(response.text)
+
+        # TODO: Fix start and end dates, clean message body
+        request = {
+            "id": request_id,
+            "request_type": tree.xpath("//span[@id='RequestEditFormLayout_roType']/text()")[0],
+            "contact_email": tree.xpath("//span[@id='RequestEditFormLayout_roContactEmail']/text()")[0],
+            "reference_number": tree.xpath("//span[@id='RequestEditFormLayout_roReferenceNo']/text()")[0],
+            "request_description": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_DeflectionTextContainer_2']/text()")[0],
+            #"request_start_date": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_56']/text()")[0],
+            #"request_end_date": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_57']/text()")[0],
+            "request_reason": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_58']/text()")[0],
+            "response_method": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_13']/text()")[0],
+            "messages": [],
+        }
+
+        for message in tree.xpath("//table[contains(@id, 'rptMessageHistory')]"):
+            sender, = message.xpath(".//span[contains(@class, 'dxrpHT')]/text()")
+            body = message.xpath(".//div[contains(@class, 'dxrpCW')]/text()") + message.xpath(".//div[contains(@class, 'dxrpCW')]/descendant::*/text()")
+
+            request["messages"].append({
+                "id": message.attrib["id"].split("_")[-1],
+                "sender": sender,
+                "body": body,
+            })
+
+        return request
+
+    def get_request_attachments(self):
+        """
+        Should this be separate?
+        """
         ...
 
 
 if __name__ == "__main__":
-    client = GovQA(os.environ["GOVQA_DOMAIN"])
+    client = GovQA(
+        os.environ["GOVQA_DOMAIN"],
+        os.environ["GOVQA_USERNAME"],
+        os.environ["GOVQA_PASSWORD"],
+    )
 
-    response = client.login(os.environ["GOVQA_USERNAME"], os.environ["GOVQA_PASSWORD"])
+    response = client.get_request(589)
 
-    with open("response.html", "w") as initial_response_content:
-        initial_response_content.write(response.content.decode("utf-8"))
+    import pprint
+    pprint.pprint(response)
