@@ -151,3 +151,7 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Junk files
+.DS_Store
+*.html
