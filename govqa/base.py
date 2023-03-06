@@ -136,7 +136,7 @@ class GovQA(Scraper):
             "contact_email": tree.xpath("//span[@id='RequestEditFormLayout_roContactEmail']/text()")[0],
             "reference_number": tree.xpath("//span[@id='RequestEditFormLayout_roReferenceNo']/text()")[0],
             "messages": [],
-            "has_attachments": bool(tree.xpath("//div[@id='dvAttachments']")),
+            "attachments": [],
         }
 
         for message in tree.xpath("//table[contains(@id, 'rptMessageHistory')]"):
@@ -158,20 +158,6 @@ class GovQA(Scraper):
                 "body": re.sub(r"\s+", " ", " ".join(body)).strip(),
             })
 
-        return request
-
-    def get_request_attachments(self, request_id):
-        self.login()
-
-        response = self.get(
-            self.url_from_endpoint("RequestEdit.aspx"),
-            params={"rid": request_id}
-        )
-
-        tree = lxml.html.fromstring(response.text)
-
-        attachments = []
-
         attachment_links =  tree.xpath(
             "//div[@id='dvAttachments']/descendant::div[@class='qac_attachment']/input[contains(@id, 'hdnAWSUrl')]"
         )
@@ -179,13 +165,13 @@ class GovQA(Scraper):
         for link in attachment_links:
             url = link.attrib["value"]
             metadata = parse_qs(urlparse(url).query)
-            attachments.append({
+            request["attachments"].append({
                 "url": link.attrib["value"],
                 "content-disposition": metadata["response-content-disposition"][0],
                 "expires": datetime.fromtimestamp(int(metadata["Expires"][0])).isoformat(),
             })
 
-        return attachments
+        return request
 
 
 if __name__ == "__main__":
@@ -203,10 +189,4 @@ if __name__ == "__main__":
 
     pprint.pprint(
         client.get_request(request_id)
-    )
-
-    pprint.pprint(response)
-
-    pprint.pprint(
-        client.get_request_attachments(request_id)
     )
