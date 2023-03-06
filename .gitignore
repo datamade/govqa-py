@@ -155,3 +155,6 @@ cython_debug/
 # Junk files
 .DS_Store
 *.html
+
+# Tests, temporarily
+tests/
