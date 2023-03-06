@@ -5,6 +5,7 @@ import re
 
 import lxml.html
 from scrapelib import Scraper
+from urllib.parse import urlparse, parse_qs
 
 
 class GovQA(Scraper):
@@ -100,14 +101,24 @@ class GovQA(Scraper):
 
         response = self.get(
             self.url_from_endpoint("CustomerIssues.aspx"),
-            params={"rid": request_id}
         )
 
         tree = lxml.html.fromstring(response.text)
 
         request_links = tree.xpath("//a[contains(@id, 'referenceLnk')]")
 
-        ...
+        requests = []
+
+        for link in request_links:
+            requests.append({
+                "id": parse_qs(urlparse(link.attrib["href"]).query)["rid"][0],
+                "reference_number": link.text,
+                "status": link.xpath(
+                    "//ancestor::div[@class='innerlist']/descendant::div[starts-with(@class, 'list_status')]/text()"
+                )[0],
+            })
+
+        return requests
 
     def get_request(self, request_id):
         self.login()
@@ -119,28 +130,30 @@ class GovQA(Scraper):
 
         tree = lxml.html.fromstring(response.text)
 
-        # TODO: Fix start and end dates, clean message body
         request = {
             "id": request_id,
             "request_type": tree.xpath("//span[@id='RequestEditFormLayout_roType']/text()")[0],
             "contact_email": tree.xpath("//span[@id='RequestEditFormLayout_roContactEmail']/text()")[0],
             "reference_number": tree.xpath("//span[@id='RequestEditFormLayout_roReferenceNo']/text()")[0],
-            "request_description": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_DeflectionTextContainer_2']/text()")[0],
-            #"request_start_date": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_56']/text()")[0],
-            #"request_end_date": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_57']/text()")[0],
-            "request_reason": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_58']/text()")[0],
-            "response_method": tree.xpath("//span[@id='requestData_CustomFieldsFormLayout_cf_13']/text()")[0],
             "messages": [],
         }
 
         for message in tree.xpath("//table[contains(@id, 'rptMessageHistory')]"):
             sender, = message.xpath(".//span[contains(@class, 'dxrpHT')]/text()")
+
+            parsed_sender = re.match(
+                r"^ On (?P<date>\d{1,2}\/\d{1,2}\/\d{4}) (?P<time>\d{1,2}:\d{1,2}:\d{1,2} (A|P)M), (?P<name>.*) wrote:$",
+                sender
+            )
+
             body = message.xpath(".//div[contains(@class, 'dxrpCW')]/text()") + message.xpath(".//div[contains(@class, 'dxrpCW')]/descendant::*/text()")
 
             request["messages"].append({
                 "id": message.attrib["id"].split("_")[-1],
-                "sender": sender,
-                "body": body,
+                "sender": parsed_sender.group("name"),
+                "date": parsed_sender.group("date"),
+                "time": parsed_sender.group("time"),
+                "body": re.sub(r"\s+", " ", " ".join(body)).strip(),
             })
 
         return request
@@ -159,7 +172,11 @@ if __name__ == "__main__":
         os.environ["GOVQA_PASSWORD"],
     )
 
-    response = client.get_request(589)
+    response = client.list_requests()
 
     import pprint
+    pprint.pprint(response)
+
+    response = client.get_request(response[0]["id"])
+
     pprint.pprint(response)
