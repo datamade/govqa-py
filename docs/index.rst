@@ -52,10 +52,3 @@ API
 
    .. automethod:: get_request
 
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
