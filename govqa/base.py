@@ -24,7 +24,7 @@ class GovQA(Scraper):
     ENDPOINTS = {
         "home": "SupportHome.aspx",
         "login": "Login.aspx",
-        "create_account": "CustomerDetails.aspx"
+        "create_account": "CustomerDetails.aspx",
         "logged_in_home": "CustomerHome.aspx",
         "messages": "CustomerIssues.aspx",
         "message": "RequestEdit.aspx",
