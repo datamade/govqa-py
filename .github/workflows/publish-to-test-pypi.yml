@@ -8,13 +8,13 @@ on:
 jobs:
   build-and-publish:
     name: Publish to Test PyPI
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     steps:
     - uses: actions/checkout@main
-    - name: Set up Python 3.7
+    - name: Set up Python 3.9
       uses: actions/setup-python@v1
       with:
-        python-version: 3.7
+        python-version: 3.9
     - name: Publish to Test PyPI
       env:
         TWINE_USERNAME: '__token__'
