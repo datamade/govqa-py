@@ -11,4 +11,4 @@ pip install govqa
 
 ## Usage
 
-Find us on ReadTheDocs!
+Read the documentation on ReadTheDocs: https://govqa-py.readthedocs.io/en/latest/
