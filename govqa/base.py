@@ -12,6 +12,15 @@ class GovQA(Scraper):
     """
     Client for programmatically interacting with GovQA instances.
 
+    :param domain: Root domain of the GovQA instance to interact with, e.g.,
+        https://governorny.govqa.us
+    :type domain: str
+    :param username: GovQA username
+    :type username: str
+    :param password: GovQA password
+    :type password: str
+    """
+
     ENDPOINTS = {
         "home": "SupportHome.aspx",
         "login": "Login.aspx",
@@ -20,15 +29,6 @@ class GovQA(Scraper):
         "messages": "CustomerIssues.aspx",
         "message": "RequestEdit.aspx",
     }
-
-    :param domain: Root domain of the GovQA instance to interact with, e.g.,
-    https://governorny.govqa.us
-    :type domain: str
-    :param username: GovQA username
-    :type username: str
-    :param password: GovQA password
-    :type password: str
-    """
 
     def __init__(self, domain, username, password, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -112,7 +112,7 @@ class GovQA(Scraper):
         the authenticated account.
 
         :return: List of dictionaries, each containing the id, reference number,
-        and status of all requests.
+            and status of all requests.
         :rtype: list
         """
         self.login()
@@ -143,7 +143,7 @@ class GovQA(Scraper):
         Retrieve detailed information, included messages and attachments, about a request.
 
         :param request_id: Identifier of the request, i.e., the "id" from a request dictionary
-        returned by list_requests(). N.b., the reference number is not the identifier.
+            returned by list_requests(). N.b., the reference number is not the identifier.
         :type request_id: int
         :return: Dictionary of request metadata, correspondence, and attachments.
         :rtype: dict
