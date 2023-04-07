@@ -25,7 +25,7 @@ Get the library and its dependencies using `pip <https://pypi.python.org/pypi/pi
 Usage
 -----
 
-::python
+::
 
    # Instantiate an instance of the GovQA client
    client = GovQA(
