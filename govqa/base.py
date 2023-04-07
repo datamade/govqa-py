@@ -10,6 +10,8 @@ from urllib.parse import urlparse, parse_qs
 
 class GovQA(Scraper):
     """
+    Client for programmatically interacting with GovQA instances.
+
     ENDPOINTS = {
         "home": "SupportHome.aspx",
         "login": "Login.aspx",
@@ -18,12 +20,20 @@ class GovQA(Scraper):
         "messages": "CustomerIssues.aspx",
         "message": "RequestEdit.aspx",
     }
+
+    :param domain: Root domain of the GovQA instance to interact with, e.g.,
+    https://governorny.govqa.us
+    :type domain: str
+    :param username: GovQA username
+    :type username: str
+    :param password: GovQA password
+    :type password: str
     """
 
     def __init__(self, domain, username, password, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.domain = domain
+        self.domain = domain.rstrip("/")
         self.username = username
         self.password = password
 
@@ -97,6 +107,14 @@ class GovQA(Scraper):
         ...
 
     def list_requests(self):
+        """
+        Retrieve the id, reference number, and status of each request submitted by
+        the authenticated account.
+
+        :return: List of dictionaries, each containing the id, reference number,
+        and status of all requests.
+        :rtype: list
+        """
         self.login()
 
         response = self.get(
@@ -121,6 +139,15 @@ class GovQA(Scraper):
         return requests
 
     def get_request(self, request_id):
+        """
+        Retrieve detailed information, included messages and attachments, about a request.
+
+        :param request_id: Identifier of the request, i.e., the "id" from a request dictionary
+        returned by list_requests(). N.b., the reference number is not the identifier.
+        :type request_id: int
+        :return: Dictionary of request metadata, correspondence, and attachments.
+        :rtype: dict
+        """
         self.login()
 
         response = self.get(
@@ -172,21 +199,3 @@ class GovQA(Scraper):
             })
 
         return request
-
-
-if __name__ == "__main__":
-    import pprint
-
-    client = GovQA(
-        os.environ["GOVQA_DOMAIN"],
-        os.environ["GOVQA_USERNAME"],
-        os.environ["GOVQA_PASSWORD"],
-    )
-
-    response = client.list_requests()
-
-    request_id = response[0]["id"]
-
-    pprint.pprint(
-        client.get_request(request_id)
-    )

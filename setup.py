@@ -15,6 +15,13 @@ setup(
         "scrapelib",
         "lxml",
     ],
+    extras_require={
+        "dev": [
+            "sphinx",
+            "pytest",
+            "requests-mock"
+        ],
+    },
     classifiers=[
         "Development Status :: 1 - Planning",
         "Programming Language :: Python :: 3.0",
