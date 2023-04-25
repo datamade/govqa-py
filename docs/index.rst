@@ -27,6 +27,8 @@ Usage
 
 ::
 
+   from govqa import GovQA
+   
    # Instantiate an instance of the GovQA client
    client = GovQA(
         os.environ["GOVQA_DOMAIN"],
@@ -46,7 +48,7 @@ API
 :class:`GovQA` Object
 --------------------------
 
-.. autoclass:: govqa.base.GovQA
+.. autoclass:: govqa.GovQA
 
    .. automethod:: list_requests
 
