@@ -15,11 +15,7 @@ setup(
         "lxml",
     ],
     extras_require={
-        "dev": [
-            "sphinx",
-            "pytest",
-            "requests-mock"
-        ],
+        "dev": ["sphinx", "pytest", "requests-mock", "black", "isort"],
     },
     classifiers=[
         "Development Status :: 1 - Planning",

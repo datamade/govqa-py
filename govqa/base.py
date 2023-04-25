@@ -1,11 +1,11 @@
-from datetime import datetime
-from hashlib import md5
 import os
 import re
+from datetime import datetime
+from hashlib import md5
+from urllib.parse import parse_qs, urlparse
 
 import lxml.html
 from scrapelib import Scraper
-from urllib.parse import urlparse, parse_qs
 
 
 class GovQA(Scraper):
@@ -68,10 +68,10 @@ class GovQA(Scraper):
         tree = lxml.html.fromstring(response.text)
 
         viewstate = tree.xpath("//input[@id='__VIEWSTATE']")[0].value
-        viewstategenerator = tree.xpath("//input[@id='__VIEWSTATEGENERATOR']")[
-            0
-        ].value
-        request_verification_token =  tree.xpath("//input[@name='__RequestVerificationToken']")[0].value
+        viewstategenerator = tree.xpath("//input[@id='__VIEWSTATEGENERATOR']")[0].value
+        request_verification_token = tree.xpath(
+            "//input[@name='__RequestVerificationToken']"
+        )[0].value
 
         headers["content-type"] = "application/x-www-form-urlencoded"
 
@@ -88,10 +88,7 @@ class GovQA(Scraper):
         }
 
         return self.post(
-            response.url,
-            data=payload,
-            headers=headers,
-            allow_redirects=True
+            response.url, data=payload, headers=headers, allow_redirects=True
         )
 
     def reset_password(self):
@@ -128,13 +125,15 @@ class GovQA(Scraper):
         requests = []
 
         for link in request_links:
-            requests.append({
-                "id": parse_qs(urlparse(link.attrib["href"]).query)["rid"][0],
-                "reference_number": link.text,
-                "status": link.xpath(
-                    "//ancestor::div[@class='innerlist']/descendant::div[starts-with(@class, 'list_status')]/text()"
-                )[0],
-            })
+            requests.append(
+                {
+                    "id": parse_qs(urlparse(link.attrib["href"]).query)["rid"][0],
+                    "reference_number": link.text,
+                    "status": link.xpath(
+                        "//ancestor::div[@class='innerlist']/descendant::div[starts-with(@class, 'list_status')]/text()"
+                    )[0],
+                }
+            )
 
         return requests
 
@@ -151,51 +150,64 @@ class GovQA(Scraper):
         self.login()
 
         response = self.get(
-            self.url_from_endpoint("RequestEdit.aspx"),
-            params={"rid": request_id}
+            self.url_from_endpoint("RequestEdit.aspx"), params={"rid": request_id}
         )
 
         tree = lxml.html.fromstring(response.text)
 
         request = {
             "id": request_id,
-            "request_type": tree.xpath("//span[@id='RequestEditFormLayout_roType']/text()")[0],
-            "contact_email": tree.xpath("//span[@id='RequestEditFormLayout_roContactEmail']/text()")[0],
-            "reference_number": tree.xpath("//span[@id='RequestEditFormLayout_roReferenceNo']/text()")[0],
+            "request_type": tree.xpath(
+                "//span[@id='RequestEditFormLayout_roType']/text()"
+            )[0],
+            "contact_email": tree.xpath(
+                "//span[@id='RequestEditFormLayout_roContactEmail']/text()"
+            )[0],
+            "reference_number": tree.xpath(
+                "//span[@id='RequestEditFormLayout_roReferenceNo']/text()"
+            )[0],
             "messages": [],
             "attachments": [],
         }
 
         for message in tree.xpath("//table[contains(@id, 'rptMessageHistory')]"):
-            sender, = message.xpath(".//span[contains(@class, 'dxrpHT')]/text()")
+            (sender,) = message.xpath(".//span[contains(@class, 'dxrpHT')]/text()")
 
             parsed_sender = re.match(
                 r"^ On (?P<date>\d{1,2}\/\d{1,2}\/\d{4}) (?P<time>\d{1,2}:\d{1,2}:\d{1,2} (A|P)M), (?P<name>.*) wrote:$",
-                sender
+                sender,
             )
 
             # TODO: Some instances (Memphis) require you to click a link to view an entire message.
-            body = message.xpath(".//div[contains(@class, 'dxrpCW')]/text()") + message.xpath(".//div[contains(@class, 'dxrpCW')]/descendant::*/text()")
+            body = message.xpath(
+                ".//div[contains(@class, 'dxrpCW')]/text()"
+            ) + message.xpath(".//div[contains(@class, 'dxrpCW')]/descendant::*/text()")
 
-            request["messages"].append({
-                "id": message.attrib["id"].split("_")[-1],
-                "sender": parsed_sender.group("name"),
-                "date": parsed_sender.group("date"),
-                "time": parsed_sender.group("time"),
-                "body": re.sub(r"\s+", " ", " ".join(body)).strip(),
-            })
+            request["messages"].append(
+                {
+                    "id": message.attrib["id"].split("_")[-1],
+                    "sender": parsed_sender.group("name"),
+                    "date": parsed_sender.group("date"),
+                    "time": parsed_sender.group("time"),
+                    "body": re.sub(r"\s+", " ", " ".join(body)).strip(),
+                }
+            )
 
-        attachment_links =  tree.xpath(
+        attachment_links = tree.xpath(
             "//div[@id='dvAttachments']/descendant::div[@class='qac_attachment']/input[contains(@id, 'hdnAWSUrl')]"
         )
 
         for link in attachment_links:
             url = link.attrib["value"]
             metadata = parse_qs(urlparse(url).query)
-            request["attachments"].append({
-                "url": link.attrib["value"],
-                "content-disposition": metadata["response-content-disposition"][0],
-                "expires": datetime.fromtimestamp(int(metadata["Expires"][0])).isoformat(),
-            })
+            request["attachments"].append(
+                {
+                    "url": link.attrib["value"],
+                    "content-disposition": metadata["response-content-disposition"][0],
+                    "expires": datetime.fromtimestamp(
+                        int(metadata["Expires"][0])
+                    ).isoformat(),
+                }
+            )
 
         return request
