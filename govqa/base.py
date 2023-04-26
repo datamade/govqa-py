@@ -182,11 +182,15 @@ class GovQA(scrapelib.Scraper):
                 sender,
             )
 
-            # TODO: Some instances (Memphis) require you to click a
-            # link to view an entire message.
             body = message.xpath(
                 ".//div[contains(@class, 'dxrpCW')]/text()"
             ) + message.xpath(".//div[contains(@class, 'dxrpCW')]/descendant::*/text()")
+
+            if "Click Here to View Entire Message" in body:
+                (link,) = message.xpath(".//div[contains(@class, 'dxrpCW')]/a")
+                onclick = link.attrib["onclick"]
+                truncated_message_path = re.search(r"\('(.*)'\)", onclick).group(1)
+                body = self._parse_truncated_message(truncated_message_path)
 
             request["messages"].append(
                 {
@@ -221,3 +225,10 @@ class GovQA(scrapelib.Scraper):
                 )
 
         return request
+
+    def _parse_truncated_message(self, truncated_message_endpoint):
+        truncated_message_url = self.url_from_endpoint(truncated_message_endpoint)
+        response = self.get(truncated_message_url)
+        tree = lxml.html.fromstring(response.text)
+        body = tree.xpath(".//div[@id='divMessage']//text()")
+        return body
