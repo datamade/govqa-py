@@ -87,9 +87,7 @@ class GovQA(scrapelib.Scraper):
             "__VIEWSTATEENCRYPTED": "",
         }
 
-        return self.post(
-            response.url, data=payload, allow_redirects=True
-        )
+        return self.post(response.url, data=payload, allow_redirects=True)
 
     def reset_password(self):
         ...
@@ -215,12 +213,10 @@ class GovQA(scrapelib.Scraper):
                         "content-disposition": metadata["response-content-disposition"][
                             0
                         ],
-                        "expires": datetime.fromtimestamp(
-                            int(metadata["Expires"][0])
-                        ).isoformat(),
+                        "expires": datetime.fromtimestamp(int(metadata["Expires"][0])),
                         "uploaded_at": datetime.strptime(
                             uploaded_at_str, "%m/%d/%Y"
-                        ).date().isoformat(),
+                        ).date(),
                     }
                 )
 
