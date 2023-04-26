@@ -36,11 +36,12 @@ Usage
         os.environ["GOVQA_PASSWORD"],
     )
 
-    # List requests for the authenticated user
-    response = client.list_requests()
+   # List requests for the authenticated user
+   requests = client.list_requests()
 
-    # Get details of a specific request
-    client.get_request(request_id)
+   for request in requests:
+       # Get details of a specific request
+       details = client.get_request(request['id'])
 
 API
 ===

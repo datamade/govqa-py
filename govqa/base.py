@@ -1,14 +1,12 @@
-import os
 import re
 from datetime import datetime
-from hashlib import md5
 from urllib.parse import parse_qs, urlparse
 
 import lxml.html
-from scrapelib import Scraper
+import scrapelib
 
 
-class GovQA(Scraper):
+class GovQA(scrapelib.Scraper):
     """
     Client for programmatically interacting with GovQA instances.
 
@@ -21,6 +19,7 @@ class GovQA(Scraper):
     :type password: str
     """
 
+    # do i need this, i don't think so.
     ENDPOINTS = {
         "home": "SupportHome.aspx",
         "login": "Login.aspx",
@@ -37,14 +36,22 @@ class GovQA(Scraper):
         self.username = username
         self.password = password
 
+        self.headers.update(
+            {
+                "user-agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Mobile Safari/537.36",
+            }
+        )
+
     def request(self, *args, **kwargs):
         response = super().request(*args, **kwargs)
 
         if "There was a problem serving the requested page" in response.text:
             response.status_code = 500
+            raise scrapelib.HTTPError(response)
 
         elif "Page Temporarily Unavailable" in response.text:
-            response.status_code = 500
+            response.status_code = 503
+            raise scrapelib.HTTPError(response)
 
         return response
 
@@ -55,13 +62,8 @@ class GovQA(Scraper):
         ...
 
     def login(self):
-        headers = {
-            "user-agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Mobile Safari/537.36",
-        }
-
         response = self.get(
             self.url_from_endpoint("Login.aspx"),
-            headers=headers,
             allow_redirects=True,
         )
 
@@ -72,8 +74,6 @@ class GovQA(Scraper):
         request_verification_token = tree.xpath(
             "//input[@name='__RequestVerificationToken']"
         )[0].value
-
-        headers["content-type"] = "application/x-www-form-urlencoded"
 
         payload = {
             "__EVENTTARGET": "",
@@ -88,7 +88,7 @@ class GovQA(Scraper):
         }
 
         return self.post(
-            response.url, data=payload, headers=headers, allow_redirects=True
+            response.url, data=payload, allow_redirects=True
         )
 
     def reset_password(self):
@@ -105,12 +105,13 @@ class GovQA(Scraper):
 
     def list_requests(self):
         """
-        Retrieve the id, reference number, and status of each request submitted by
-        the authenticated account.
+        Retrieve the id, reference number, and status of each request
+        submitted by the authenticated account.
 
-        :return: List of dictionaries, each containing the id, reference number,
-            and status of all requests.
+        :return: List of dictionaries, each containing the id,
+            reference number, and status of all requests.
         :rtype: list
+
         """
         self.login()
 
@@ -139,13 +140,18 @@ class GovQA(Scraper):
 
     def get_request(self, request_id):
         """
-        Retrieve detailed information, included messages and attachments, about a request.
+        Retrieve detailed information, included messages and
+        attachments, about a request.
 
-        :param request_id: Identifier of the request, i.e., the "id" from a request dictionary
-            returned by list_requests(). N.b., the reference number is not the identifier.
+        :param request_id: Identifier of the request, i.e., the "id"
+            from a request dictionary returned by
+            list_requests(). N.b., the reference number is not the
+            identifier.
         :type request_id: int
-        :return: Dictionary of request metadata, correspondence, and attachments.
+        :return: Dictionary of request metadata, correspondence, and
+            attachments.
         :rtype: dict
+
         """
         self.login()
 
@@ -178,7 +184,8 @@ class GovQA(Scraper):
                 sender,
             )
 
-            # TODO: Some instances (Memphis) require you to click a link to view an entire message.
+            # TODO: Some instances (Memphis) require you to click a
+            # link to view an entire message.
             body = message.xpath(
                 ".//div[contains(@class, 'dxrpCW')]/text()"
             ) + message.xpath(".//div[contains(@class, 'dxrpCW')]/descendant::*/text()")
@@ -194,20 +201,27 @@ class GovQA(Scraper):
             )
 
         attachment_links = tree.xpath(
-            "//div[@id='dvAttachments']/descendant::div[@class='qac_attachment']/input[contains(@id, 'hdnAWSUrl')]"
+            "//div[@id='dvAttachments']/descendant::div[@class='qac_attachment']/input[contains(@id, 'hdnAWSUrl') or contains(@id, 'hdnAzureURL')]"
         )
 
         for link in attachment_links:
-            url = link.attrib["value"]
-            metadata = parse_qs(urlparse(url).query)
-            request["attachments"].append(
-                {
-                    "url": link.attrib["value"],
-                    "content-disposition": metadata["response-content-disposition"][0],
-                    "expires": datetime.fromtimestamp(
-                        int(metadata["Expires"][0])
-                    ).isoformat(),
-                }
-            )
+            if "value" in link.attrib:
+                url = link.attrib["value"]
+                uploaded_at_str = link.xpath("../../../td[1]/text()")[0].strip()
+                metadata = parse_qs(urlparse(url).query)
+                request["attachments"].append(
+                    {
+                        "url": link.attrib["value"],
+                        "content-disposition": metadata["response-content-disposition"][
+                            0
+                        ],
+                        "expires": datetime.fromtimestamp(
+                            int(metadata["Expires"][0])
+                        ).isoformat(),
+                        "uploaded_at": datetime.strptime(
+                            uploaded_at_str, "%m/%d/%Y"
+                        ).date().isoformat(),
+                    }
+                )
 
         return request
