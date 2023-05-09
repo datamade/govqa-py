@@ -4,6 +4,15 @@ from urllib.parse import parse_qs, urlparse
 
 import lxml.html
 import scrapelib
+import jsonschema
+
+
+class UnauthenticatedError(RuntimeError):
+    def __init__(self):
+        # Call the base class constructor with the parameters it needs
+        super().__init__(
+            "This method requires authentication, please run the `login` method before calling this method"
+        )
 
 
 class GovQA(scrapelib.Scraper):
@@ -29,12 +38,10 @@ class GovQA(scrapelib.Scraper):
         "message": "RequestEdit.aspx",
     }
 
-    def __init__(self, domain, username, password, *args, **kwargs):
+    def __init__(self, domain, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.domain = domain.rstrip("/")
-        self.username = username
-        self.password = password
 
         self.headers.update(
             {
@@ -58,10 +65,49 @@ class GovQA(scrapelib.Scraper):
     def url_from_endpoint(self, endpoint):
         return f"{self.domain}/WEBAPP/_rs/{endpoint}"
 
-    def create_account(self):
-        ...
+    def new_account_form(self):
+        response = self.get(self.url_from_endpoint("Login.aspx"), allow_redirects=True)
 
-    def login(self):
+        tree = lxml.html.fromstring(response.text)
+
+        (create_user_link,) = tree.xpath("//a[@id='lnkCreateUser']")
+
+        response = self.get(
+            self.url_from_endpoint(create_user_link.attrib["href"]),
+            allow_redirects=True,
+        )
+
+        tree = lxml.html.fromstring(response.text)
+
+        # find the table elements that are direct ancestors of labels
+        # that have an <em> next to them indicating a required field,
+        # and then find the non-hidden inputs descendants of those
+        # tables
+        required_inputs = tree.xpath(
+            ".//table[tr/td/label[starts-with(@for, 'customer') and following-sibling::em]]//input[not(@type='hidden')]"
+        )
+
+        properties = {}
+        post_keys = {}
+        for element in required_inputs:
+            label = element.attrib["aria-label"].lower().replace(' ', '_')
+            properties[label] = {"type": "string"}
+            if element.attrib.get("role") == "combobox":
+                # need to get valid options here
+                raise NotImplementedError
+
+            post_keys[label] = element.attrib["name"]
+
+        schema = {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+        }
+
+        form = CreateAccountForm(schema, post_keys, create_user_link, self, None)
+        return form
+
+    def login(self, username, password):
         response = self.get(
             self.url_from_endpoint("Login.aspx"),
             allow_redirects=True,
@@ -80,8 +126,8 @@ class GovQA(scrapelib.Scraper):
             "__EVENTARGUMENT": "",
             "__VIEWSTATE": viewstate,
             "__RequestVerificationToken": request_verification_token,
-            "ASPxFormLayout1$txtUsername": self.username,
-            "ASPxFormLayout1$txtPassword": self.password,
+            "ASPxFormLayout1$txtUsername": username,
+            "ASPxFormLayout1$txtPassword": password,
             "ASPxFormLayout1$btnLogin": "Submit",
             "__VIEWSTATEGENERATOR": viewstategenerator,
             "__VIEWSTATEENCRYPTED": "",
@@ -111,11 +157,12 @@ class GovQA(scrapelib.Scraper):
         :rtype: list
 
         """
-        self.login()
 
         response = self.get(
             self.url_from_endpoint("CustomerIssues.aspx"),
         )
+
+        self._check_logged_in(response)
 
         tree = lxml.html.fromstring(response.text)
 
@@ -151,11 +198,12 @@ class GovQA(scrapelib.Scraper):
         :rtype: dict
 
         """
-        self.login()
 
         response = self.get(
             self.url_from_endpoint("RequestEdit.aspx"), params={"rid": request_id}
         )
+
+        self._check_logged_in(response)
 
         tree = lxml.html.fromstring(response.text)
 
@@ -232,3 +280,24 @@ class GovQA(scrapelib.Scraper):
         tree = lxml.html.fromstring(response.text)
         body = tree.xpath(".//div[@id='divMessage']//text()")
         return body
+
+    def _check_logged_in(self, response):
+        if "If you have used this service previously, please log in" in response.text:
+            raise UnauthenticatedError
+
+
+class CreateAccountForm:
+    def __init__(self, schema, post_keys, url, session, captcha=None):
+        jsonschema.Draft7Validator.check_schema(schema)
+        self.schema = schema
+        self.captcha = captcha
+        self._url = url
+        self._post_keys = post_keys
+        self._session = session
+
+    def submit(self, required_inputs):
+        jsonschema.validate(required_inputs, self.schema)
+
+        # make the post
+        # catch errors and return useful error message
+        ...

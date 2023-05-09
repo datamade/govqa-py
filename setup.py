@@ -13,6 +13,7 @@ setup(
         "setuptools>=46.4",
         "scrapelib",
         "lxml",
+        "jsonschema",
     ],
     extras_require={
         "dev": ["sphinx", "pytest", "requests-mock", "black", "isort"],
