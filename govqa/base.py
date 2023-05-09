@@ -66,46 +66,7 @@ class GovQA(scrapelib.Scraper):
         return f"{self.domain}/WEBAPP/_rs/{endpoint}"
 
     def new_account_form(self):
-        response = self.get(self.url_from_endpoint("Login.aspx"), allow_redirects=True)
-
-        tree = lxml.html.fromstring(response.text)
-
-        (create_user_link,) = tree.xpath("//a[@id='lnkCreateUser']")
-
-        response = self.get(
-            self.url_from_endpoint(create_user_link.attrib["href"]),
-            allow_redirects=True,
-        )
-
-        tree = lxml.html.fromstring(response.text)
-
-        # find the table elements that are direct ancestors of labels
-        # that have an <em> next to them indicating a required field,
-        # and then find the non-hidden inputs descendants of those
-        # tables
-        required_inputs = tree.xpath(
-            ".//table[tr/td/label[starts-with(@for, 'customer') and following-sibling::em]]//input[not(@type='hidden')]"
-        )
-
-        properties = {}
-        post_keys = {}
-        for element in required_inputs:
-            label = element.attrib["aria-label"].lower().replace(' ', '_')
-            properties[label] = {"type": "string"}
-            if element.attrib.get("role") == "combobox":
-                # need to get valid options here
-                raise NotImplementedError
-
-            post_keys[label] = element.attrib["name"]
-
-        schema = {
-            "type": "object",
-            "properties": properties,
-            "required": list(properties),
-        }
-
-        form = CreateAccountForm(schema, post_keys, create_user_link, self, None)
-        return form
+        return CreateAccountForm(self)
 
     def login(self, username, password):
         response = self.get(
@@ -287,13 +248,24 @@ class GovQA(scrapelib.Scraper):
 
 
 class CreateAccountForm:
-    def __init__(self, schema, post_keys, url, session, captcha=None):
-        jsonschema.Draft7Validator.check_schema(schema)
-        self.schema = schema
-        self.captcha = captcha
-        self._url = url
-        self._post_keys = post_keys
+    def __init__(self, session):
         self._session = session
+
+        response = self._create_account_page()
+
+        tree = lxml.html.fromstring(response.text)
+
+        # find the table elements that are direct ancestors of labels
+        # that have an <em> next to them indicating a required field,
+        # and then find the non-hidden inputs descendants of those
+        # tables
+        required_inputs = tree.xpath(
+            ".//table[tr/td/label[starts-with(@for, 'customer') and following-sibling::em]]//input[not(@type='hidden')]"
+        )
+
+        self.schema = self._generate_schema(required_inputs)
+        self._post_keys = self._generate_post_keys(required_inputs)
+        self.captcha = None
 
     def submit(self, required_inputs):
         jsonschema.validate(required_inputs, self.schema)
@@ -301,3 +273,46 @@ class CreateAccountForm:
         # make the post
         # catch errors and return useful error message
         ...
+
+    def _create_account_page(self):
+        response = self._session.get(
+            self._session.url_from_endpoint("Login.aspx"), allow_redirects=True
+        )
+
+        tree = lxml.html.fromstring(response.text)
+
+        (create_user_link,) = tree.xpath("//a[@id='lnkCreateUser']")
+
+        response = self._session.get(
+            self._session.url_from_endpoint(create_user_link.attrib["href"]),
+            allow_redirects=True,
+        )
+
+        return response
+
+    def _generate_schema(self, required_inputs):
+        properties = {}
+        for element in required_inputs:
+            label = element.attrib["aria-label"].lower().replace(" ", "_")
+            properties[label] = {"type": "string"}
+            if element.attrib.get("role") == "combobox":
+                # need to get valid options here
+                raise NotImplementedError
+
+        schema = {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+        }
+
+        jsonschema.Draft7Validator.check_schema(schema)
+
+        return schema
+
+    def _generate_post_keys(self, required_inputs):
+        post_keys = {}
+        for element in required_inputs:
+            label = element.attrib["aria-label"].lower().replace(" ", "_")
+            post_keys[label] = element.attrib["name"]
+
+        return post_keys
