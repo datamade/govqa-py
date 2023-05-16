@@ -1,10 +1,11 @@
+import io
 import re
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
+import jsonschema
 import lxml.html
 import scrapelib
-import jsonschema
 
 
 class UnauthenticatedError(RuntimeError):
@@ -265,7 +266,52 @@ class CreateAccountForm:
 
         self.schema = self._generate_schema(required_inputs)
         self._post_keys = self._generate_post_keys(required_inputs)
-        self.captcha = None
+
+        self.captcha = self._captcha(tree)
+
+        if self.captcha:
+            self.schema["properties"]["captcha"] = {
+                "type": "string",
+                "pattern": "^[A-Z]{6}$",
+            }
+            self.schema["required"].append("captcha")
+
+    def _captcha(self, tree):
+        captcha_info = {}
+
+        try:
+            (captcha_img,) = tree.xpath(
+                '//img[@id="c_customerdetails_captchaformlayout_captcha_CaptchaImage"]'
+            )
+        except ValueError:
+            captcha_jpeg = None
+        else:
+            captcha_jpeg = io.BytesIO(
+                self._session.get(
+                    self._session.domain + captcha_img.attrib["src"]
+                ).content
+            )
+
+        if captcha_jpeg:
+            captcha_info["jpeg"] = captcha_jpeg
+
+        try:
+            (captcha_wav_link,) = tree.xpath(
+                '//a[@id="c_customerdetails_captchaformlayout_captcha_SoundLink"]'
+            )
+        except ValueError:
+            captcha_wav = None
+        else:
+            captcha_wav = io.BytesIO(
+                self._session.get(
+                    self._session.domain + captcha_wav_link.attrib["href"]
+                ).content
+            )
+
+        if captcha_wav:
+            captcha_info["wav"] = captcha_wav
+
+        return captcha_info
 
     def submit(self, required_inputs):
         jsonschema.validate(required_inputs, self.schema)
