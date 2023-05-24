@@ -16,6 +16,10 @@ class UnauthenticatedError(RuntimeError):
         )
 
 
+class FormValidationError(RuntimeError):
+    pass
+
+
 class GovQA(scrapelib.Scraper):
     """
     Client for programmatically interacting with GovQA instances.
@@ -77,7 +81,19 @@ class GovQA(scrapelib.Scraper):
 
         tree = lxml.html.fromstring(response.text)
 
+        payload = self._secrets(tree)
+        payload.update(
+            {
+                "ASPxFormLayout1$txtUsername": username,
+                "ASPxFormLayout1$txtPassword": password,
+            }
+        )
+
+        return self.post(response.url, data=payload, allow_redirects=True)
+
+    def _secrets(self, tree):
         viewstate = tree.xpath("//input[@id='__VIEWSTATE']")[0].value
+
         viewstategenerator = tree.xpath("//input[@id='__VIEWSTATEGENERATOR']")[0].value
         request_verification_token = tree.xpath(
             "//input[@name='__RequestVerificationToken']"
@@ -88,14 +104,20 @@ class GovQA(scrapelib.Scraper):
             "__EVENTARGUMENT": "",
             "__VIEWSTATE": viewstate,
             "__RequestVerificationToken": request_verification_token,
-            "ASPxFormLayout1$txtUsername": username,
-            "ASPxFormLayout1$txtPassword": password,
             "ASPxFormLayout1$btnLogin": "Submit",
             "__VIEWSTATEGENERATOR": viewstategenerator,
             "__VIEWSTATEENCRYPTED": "",
         }
 
-        return self.post(response.url, data=payload, allow_redirects=True)
+        try:
+            viewstate_1 = tree.xpath("//input[@id='__VIEWSTATE1']")[0].value
+        except IndexError:
+            pass
+        else:
+            payload["__VIEWSTATE1"] = viewstate_1
+            payload["__VIEWSTATEFIELDCOUNT"] = 2
+
+        return payload
 
     def reset_password(self):
         ...
@@ -253,6 +275,7 @@ class CreateAccountForm:
         self._session = session
 
         response = self._create_account_page()
+        self.account_creation_page = response.request.url
 
         tree = lxml.html.fromstring(response.text)
 
@@ -272,9 +295,13 @@ class CreateAccountForm:
         if self.captcha:
             self.schema["properties"]["captcha"] = {
                 "type": "string",
-                "pattern": "^[A-Z]{6}$",
+                "pattern": "^[A-Z0-9]{4,6}$",
             }
             self.schema["required"].append("captcha")
+            self._post_keys["captcha"] = "captchaFormLayout$CaptchaCodeTextBox"
+
+        self._payload = self._session._secrets(tree)
+        self._payload["__EVENTTARGET"] = "btnSaveData"
 
     def _captcha(self, tree):
         captcha_info = {}
@@ -315,6 +342,20 @@ class CreateAccountForm:
 
     def submit(self, required_inputs):
         jsonschema.validate(required_inputs, self.schema)
+
+        payload = self._payload.copy()
+        payload.update({self._post_keys[k]: v for k, v in required_inputs.items()})
+
+        response = self._session.post(self.account_creation_page, data=payload)
+
+        tree = lxml.html.fromstring(response.text)
+
+        form_validation_errors = tree.xpath('//*[@id="header_errors1"]//li/text()')
+
+        print(form_validation_errors)
+
+        for error in form_validation_errors:
+            raise FormValidationError(f'The form did validate with error: "{error}"')
 
         # make the post
         # catch errors and return useful error message
