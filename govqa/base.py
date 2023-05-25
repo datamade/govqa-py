@@ -20,6 +20,14 @@ class FormValidationError(RuntimeError):
     pass
 
 
+class IncorrectCaptcha(FormValidationError):
+    pass
+
+
+class EmailAlreadyExists(FormValidationError):
+    pass
+
+
 class GovQA(scrapelib.Scraper):
     """
     Client for programmatically interacting with GovQA instances.
@@ -440,15 +448,26 @@ class CreateAccountForm:
                 '//div[@id="header_errors1"]//li/text()'
             )
 
-            assert len(form_validation_errors) > 0
+            if not len(form_validation_errors):
+                raise FormValidationError(
+                    "The form did not validate for an unknown reason."
+                )
+
+            if "Email address already exists." in form_validation_errors:
+                raise EmailAlreadyExists(
+                    "The email address already exists in this instance."
+                )
 
             # reset the captcha and secrets if we want to try again
             self.captcha = self._captcha(tree)
             self._payload.update(self._secrets(tree))
 
+            if "The submitted code is incorrect." in form_validation_errors:
+                raise IncorrectCaptcha("The submitted captcha was incorrect")
+
             for error in form_validation_errors:
                 raise FormValidationError(
-                    f'The form did not validate. It reports this error: "{error}"'
+                    f'The form did not validate. The website reports this error: "{error}"'
                 )
 
     def _create_account_page(self):
