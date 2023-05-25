@@ -86,6 +86,7 @@ class GovQA(scrapelib.Scraper):
             {
                 "ASPxFormLayout1$txtUsername": username,
                 "ASPxFormLayout1$txtPassword": password,
+                "ASPxFormLayout1$btnLogin": "Submit",
             }
         )
 
@@ -104,7 +105,6 @@ class GovQA(scrapelib.Scraper):
             "__EVENTARGUMENT": "",
             "__VIEWSTATE": viewstate,
             "__RequestVerificationToken": request_verification_token,
-            "ASPxFormLayout1$btnLogin": "Submit",
             "__VIEWSTATEGENERATOR": viewstategenerator,
             "__VIEWSTATEENCRYPTED": "",
         }
@@ -290,6 +290,10 @@ class CreateAccountForm:
         self.schema = self._generate_schema(required_inputs)
         self._post_keys = self._generate_post_keys(required_inputs)
 
+        self._payload = self._session._secrets(tree)
+        self._payload["__EVENTTARGET"] = "btnSaveData"
+        self._payload["customerInfo$hiddenPasswordChanged"] = 1
+
         self.captcha = self._captcha(tree)
 
         if self.captcha:
@@ -300,8 +304,16 @@ class CreateAccountForm:
             self.schema["required"].append("captcha")
             self._post_keys["captcha"] = "captchaFormLayout$CaptchaCodeTextBox"
 
-        self._payload = self._session._secrets(tree)
-        self._payload["__EVENTTARGET"] = "btnSaveData"
+            self._payload[
+                "BDC_VCID_c_customerdetails_captchaformlayout_captcha"
+            ] = tree.xpath(
+                '//input[@id="BDC_VCID_c_customerdetails_captchaformlayout_captcha"]'
+            )[
+                0
+            ].value
+            self._payload[
+                "BDC_BackWorkaround_c_customerdetails_captchaformlayout_captcha"
+            ] = 1
 
     def _captcha(self, tree):
         captcha_info = {}
@@ -345,14 +357,58 @@ class CreateAccountForm:
 
         payload = self._payload.copy()
         payload.update({self._post_keys[k]: v for k, v in required_inputs.items()})
+        payload[self._post_keys["confirm_password"]] = required_inputs["password"]
+
+        payload.update(
+            {
+                "header_RadScriptManager1_TSM": ";;System.Web.Extensions,+Version=4.0.0.0,+Culture=neutral,+PublicKeyToken=31bf3856ad364e35:en-US:5bc44d53-7cae-4d56-af98-205692fecf1f:ea597d4b:b25378d2",
+                "header$ASPxMenu1": "{&quot;selectedItemIndexPath&quot;:&quot;&quot;,&quot;checkedState&quot;:&quot;&quot;}",
+                "header$errors": "{&quot;invalidEditors&quot;:[]}",
+                "header_RadNotification1_ClientState": "",
+                "customerInfo$hdRelId": "",
+                "customerInfo$CustomerFormLayout$txtEmail$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtPassword$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtConfirmPassword$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtField2$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtField4$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtPhoneMask$State": "{&quot;rawValue&quot;:&quot;9312103610&quot;,&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtAddressOne$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtAddressOne": "",
+                "customerInfo$CustomerFormLayout$txtAddressTwo$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtAddressTwo": "",
+                "customerInfo$CustomerFormLayout$txtCity$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtCity": "",
+                "customerInfo$CustomerFormLayout$lstState$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo_CustomerFormLayout_lstState_VI": "",
+                "customerInfo$CustomerFormLayout$lstState": "",
+                "customerInfo$CustomerFormLayout$lstState$DDDState": "{&quot;windowsState&quot;:&quot;0:0:-1:0:0:0:-10000:-10000:1:0:0:0&quot;}",
+                "customerInfo$CustomerFormLayout$lstState$DDD$L$State": "{&quot;CustomCallback&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$lstState$DDD$L": "",
+                "customerInfo$CustomerFormLayout$txtZip$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$txtZip": "",
+                "customerInfo$CustomerFormLayout$cf_3$State": "{&quot;validationState&quot;:&quot;&quot;}",
+                "customerInfo$CustomerFormLayout$cf_3": "",
+                "customerInfo$hiddenPasswordChanged": "1",
+                "header$RadNotification1$hiddenState": "",
+                "header_RadNotification1_XmlPanel_ClientState": "",
+                "header_RadNotification1_TitleMenu_ClientState": "",
+                "DXScript": "1_11,1_12,1_14,1_252,1_23,1_64,1_15,1_17,1_24,1_33,1_202,1_60,1_183,1_184,1_185,1_190,1_186,1_193,1_41,1_182",
+                "DXCss": "0_2771,0_2772,1_68,1_69,1_70,0_2776,1_210,0_2685,0_2686,1_209,0_2690",
+                "fileStatus": "",
+                "hdnUploadRequiredValidation": "",
+            }
+        )
+
+        print(payload)
 
         response = self._session.post(self.account_creation_page, data=payload)
 
         tree = lxml.html.fromstring(response.text)
 
-        form_validation_errors = tree.xpath('//*[@id="header_errors1"]//li/text()')
+        form_validation_errors = tree.xpath('//div[@id="header_errors1"]//li/text()')
 
         print(form_validation_errors)
+        breakpoint()
 
         for error in form_validation_errors:
             raise FormValidationError(f'The form did validate with error: "{error}"')
@@ -385,6 +441,9 @@ class CreateAccountForm:
             if element.attrib.get("role") == "combobox":
                 # need to get valid options here
                 raise NotImplementedError
+
+        # we'll handle duplicating the password elsewhere
+        properties.pop("confirm_password")
 
         schema = {
             "type": "object",
