@@ -1,7 +1,8 @@
+import ast
 import io
 import re
 from datetime import datetime
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import jsonschema
 import lxml.html
@@ -58,7 +59,7 @@ class GovQA(scrapelib.Scraper):
 
         self.headers.update(
             {
-                "user-agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Mobile Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/111.0",
             }
         )
 
@@ -89,7 +90,7 @@ class GovQA(scrapelib.Scraper):
 
         tree = lxml.html.fromstring(response.text)
 
-        payload = self._secrets(tree)
+        payload = self._secrets(tree, response)
         payload.update(
             {
                 "ASPxFormLayout1$txtUsername": username,
@@ -100,7 +101,7 @@ class GovQA(scrapelib.Scraper):
 
         return self.post(response.url, data=payload, allow_redirects=True)
 
-    def _secrets(self, tree):
+    def _secrets(self, tree, response):
         viewstate = tree.xpath("//input[@id='__VIEWSTATE']")[0].value
 
         viewstategenerator = tree.xpath("//input[@id='__VIEWSTATEGENERATOR']")[0].value
@@ -123,7 +124,7 @@ class GovQA(scrapelib.Scraper):
             pass
         else:
             payload["__VIEWSTATE1"] = viewstate_1
-            payload["__VIEWSTATEFIELDCOUNT"] = 2
+            payload["__VIEWSTATEFIELDCOUNT"] = "2"
 
         return payload
 
@@ -295,13 +296,17 @@ class CreateAccountForm:
             ".//table[tr/td/label[starts-with(@for, 'customer') and following-sibling::em]]//input[not(@type='hidden')]"
         )
 
-        self.schema = self._generate_schema(required_inputs)
+        required_inputs += tree.xpath(
+            ".//table[tr/td/span[starts-with(@id, 'customer') and following-sibling::em]]//input"
+        )
+
+        self.schema = self._generate_schema(required_inputs, response)
         self._post_keys = self._generate_post_keys(required_inputs)
 
-        self._payload = self._secrets(tree)
+        self._payload = self._secrets(tree, response)
         self._payload.update(self._form_values(tree))
         self._payload["__EVENTTARGET"] = "btnSaveData"
-        self._payload["customerInfo$hiddenPasswordChanged"] = 1
+        self._payload["customerInfo$hiddenPasswordChanged"] = "1"
 
         self.captcha = self._captcha(tree)
 
@@ -316,14 +321,23 @@ class CreateAccountForm:
                 "BDC_BackWorkaround_c_customerdetails_captchaformlayout_captcha"
             ] = 1
 
-    def _generate_schema(self, required_inputs):
+    def _generate_schema(self, required_inputs, response):
         properties = {}
         for element in required_inputs:
-            label = element.attrib["aria-label"].lower().replace(" ", "_")
+            try:
+                label = element.attrib["aria-label"].lower().replace(" ", "_")
+            except KeyError:
+                label = element.attrib["name"]
             properties[label] = {"type": "string"}
             if element.attrib.get("role") == "combobox":
-                # need to get valid options here
-                raise NotImplementedError
+                pattern = rf"'uniqueID':'{re.escape(label)}\$DDD\$L'(?:[^}}]+}})+[^}}]+?'itemsInfo':(\[[^\]]*?\])"
+
+                matches = re.search(pattern, response.text)
+                options = ast.literal_eval(matches.group(1))
+                properties[label]["enum"] = [option["value"] for option in options[1:]]
+
+            elif element.getparent().getparent().attrib.get("role") == "checkbox":
+                properties[label]["enum"] = ["U", "C"]
 
         # we'll handle duplicating the password elsewhere
         properties.pop("confirm_password")
@@ -348,13 +362,20 @@ class CreateAccountForm:
     def _generate_post_keys(self, required_inputs):
         post_keys = {}
         for element in required_inputs:
-            label = element.attrib["aria-label"].lower().replace(" ", "_")
-            post_keys[label] = element.attrib["name"]
+            try:
+                label = element.attrib["aria-label"].lower().replace(" ", "_")
+            except KeyError:
+                label = element.attrib["name"]
+            post_keys[label] = [element.attrib["name"]]
+            if element.attrib.get("role") == "combobox":
+                post_keys[label].append(
+                    element.xpath('../../..//input[@type="hidden"]')[0].name
+                )
 
         return post_keys
 
-    def _secrets(self, tree):
-        payload = self._session._secrets(tree)
+    def _secrets(self, tree, response):
+        payload = self._session._secrets(tree, response)
 
         captcha_hash_input = tree.xpath(
             '//input[@id="BDC_VCID_c_customerdetails_captchaformlayout_captcha"]'
@@ -372,12 +393,16 @@ class CreateAccountForm:
             ".//table[tr/td/label[starts-with(@for, 'customer')]]//input[not(@type='hidden')]"
         )
 
+        form_inputs += tree.xpath(
+            ".//table[tr/td/span[starts-with(@id, 'customer')]]//input"
+        )
+
         form_values = {}
 
         for form_input in form_inputs:
             name = form_input.attrib["name"]
             form_values[name] = ""
-            form_values[f"{name}$State"] = "{&quot;validationState&quot;:&quot;&quot;}"
+            form_values[f"{name}$State"] = '{"validationState":""}'
 
         return form_values
 
@@ -422,18 +447,29 @@ class CreateAccountForm:
         jsonschema.validate(required_inputs, self.schema)
 
         payload = self._payload.copy()
-        payload.update({self._post_keys[k]: v for k, v in required_inputs.items()})
-        payload[self._post_keys["confirm_password"]] = required_inputs["password"]
+        payload.update(
+            {
+                post_key: v
+                for k, v in required_inputs.items()
+                for post_key in self._post_keys[k]
+            }
+        )
+        payload[self._post_keys["confirm_password"][0]] = required_inputs["password"]
 
         if "phone" in required_inputs:
             payload[
                 "customerInfo$CustomerFormLayout$txtPhoneMask$State"
-            ] = '{{"rawValue":"{phone}","validationState":""}}'.format(
-                phone=required_inputs["phone"]
-            )
+            ] = f'{{"rawValue":"{required_inputs["phone"]}","validationState":""}}'
+
+        payload[
+            "customerInfo$CustomerFormLayout$cf_2$State"
+        ] = '{"rawValue":"","validationState":""}'
 
         try:
-            response = self._session.post(self.account_creation_page, data=payload)
+            response = self._session.post(
+                self.account_creation_page,
+                data=payload
+            )
         except scrapelib.HTTPError as error:
             # Unfortunately, we don't get a clean success page, but if we
             # get redirected to the Home Page then we have been successful
@@ -460,7 +496,7 @@ class CreateAccountForm:
 
             # reset the captcha and secrets if we want to try again
             self.captcha = self._captcha(tree)
-            self._payload.update(self._secrets(tree))
+            self._payload.update(self._secrets(tree, response))
 
             if "The submitted code is incorrect." in form_validation_errors:
                 raise IncorrectCaptcha("The submitted captcha was incorrect")
