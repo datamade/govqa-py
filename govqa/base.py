@@ -2,11 +2,13 @@ import ast
 import io
 import re
 from datetime import datetime
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import jsonschema
 import lxml.html
 import scrapelib
+
+from .input_types import CheckBox, ComboBox, Input, RadioGroup, TextArea
 
 
 class UnauthenticatedError(RuntimeError):
@@ -82,6 +84,9 @@ class GovQA(scrapelib.Scraper):
     def new_account_form(self):
         return CreateAccountForm(self)
 
+    def request_form(self, request_type):
+        return RequestForm(self, request_type)
+
     def login(self, username, password):
         response = self.get(
             self.url_from_endpoint("Login.aspx"),
@@ -129,12 +134,6 @@ class GovQA(scrapelib.Scraper):
         return payload
 
     def reset_password(self):
-        ...
-
-    def submit_request(self):
-        """
-        Text and attachments
-        """
         ...
 
     def update_request(self, request_id):
@@ -466,10 +465,7 @@ class CreateAccountForm:
         ] = '{"rawValue":"","validationState":""}'
 
         try:
-            response = self._session.post(
-                self.account_creation_page,
-                data=payload
-            )
+            response = self._session.post(self.account_creation_page, data=payload)
         except scrapelib.HTTPError as error:
             # Unfortunately, we don't get a clean success page, but if we
             # get redirected to the Home Page then we have been successful
@@ -521,3 +517,66 @@ class CreateAccountForm:
         )
 
         return response
+
+
+class RequestForm:
+    def __init__(self, session, request_type):
+        self._session = session
+
+        # come back and fix this request types
+        url = (
+            self._session.url_from_endpoint("RequestOpen.aspx")
+            + f"?rqst={request_type}"
+        )
+        response = self._session.get(url)
+        self._session._check_logged_in(response)
+
+        tree = lxml.html.fromstring(response.text)
+
+        # find the table elements that are direct ancestors of labels
+        # that have an <em> next to them indicating a required field
+        required_inputs_tables = tree.xpath(
+            ".//table[tr/td/label[starts-with(@for, 'request') and following-sibling::em]] | "
+            ".//table[tr/td/span[starts-with(@id, 'request') and following-sibling::em]]"
+        )
+
+        required_inputs = self._inputs(required_inputs_tables, response.text)
+
+        self.schema = self._generate_schema(required_inputs)
+
+        breakpoint()
+
+    def _inputs(self, required_inputs_tables, source_text):
+        required_inputs = {}
+
+        for table in required_inputs_tables:
+            if table.xpath(".//input[@role='combobox']"):
+                klass = ComboBox
+            elif table.xpath(".//textarea"):
+                klass = TextArea
+            elif table.xpath(".//table[@role='radiogroup']"):
+                klass = RadioGroup
+            elif table.xpath(".//span[@role='checkbox']"):
+                klass = CheckBox
+            else:
+                klass = Input
+
+            input_element = klass(table, source_text)
+            required_inputs[input_element.label] = input_element
+
+        return required_inputs
+
+    def _generate_schema(self, required_inputs):
+        properties = {
+            key: element.properties for key, element in required_inputs.items()
+        }
+        schema = {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+
+        jsonschema.Draft7Validator.check_schema(schema)
+
+        return schema
