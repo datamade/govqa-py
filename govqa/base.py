@@ -8,7 +8,7 @@ import jsonschema
 import lxml.html
 import scrapelib
 
-from .input_types import CheckBox, ComboBox, Input, RadioGroup, TextArea
+from .input_types import CheckBox, ComboBox, Input, RadioGroup, TextArea, Captcha
 
 
 class UnauthenticatedError(RuntimeError):
@@ -123,13 +123,16 @@ class GovQA(scrapelib.Scraper):
             "__VIEWSTATEENCRYPTED": "",
         }
 
-        try:
-            viewstate_1 = tree.xpath("//input[@id='__VIEWSTATE1']")[0].value
-        except IndexError:
-            pass
-        else:
-            payload["__VIEWSTATE1"] = viewstate_1
-            payload["__VIEWSTATEFIELDCOUNT"] = "2"
+        fieldcounts = tree.xpath("//input[@id='__VIEWSTATEFIELDCOUNT']")
+        if fieldcounts:
+            viewstatefieldcount = int(fieldcounts[0].value)
+            for higher_viewstate in range(1, viewstatefieldcount):
+                viewstate = tree.xpath(f"//input[@id='__VIEWSTATE{higher_viewstate}']")[
+                    0
+                ].value
+                payload[f"__VIEWSTATE{higher_viewstate}"] = viewstate
+
+                payload["__VIEWSTATEFIELDCOUNT"] = str(viewstatefieldcount)
 
         return payload
 
@@ -389,10 +392,8 @@ class CreateAccountForm:
 
     def _form_values(self, tree):
         form_inputs = tree.xpath(
-            ".//table[tr/td/label[starts-with(@for, 'customer')]]//input[not(@type='hidden')]"
-        )
-
-        form_inputs += tree.xpath(
+            ".//table[tr/td/label[starts-with(@for, 'customer')]]//input[not(@type='hidden')] | "
+            ".//table[tr/td/label[starts-with(@for, 'customer')]]//textarea | "
             ".//table[tr/td/span[starts-with(@id, 'customer')]]//input"
         )
 
@@ -519,32 +520,26 @@ class CreateAccountForm:
         return response
 
 
-class RequestForm:
-    def __init__(self, session, request_type):
-        self._session = session
-
-        # come back and fix this request types
-        url = (
-            self._session.url_from_endpoint("RequestOpen.aspx")
-            + f"?rqst={request_type}"
-        )
-        response = self._session.get(url)
-        self._session._check_logged_in(response)
-
-        tree = lxml.html.fromstring(response.text)
-
-        # find the table elements that are direct ancestors of labels
-        # that have an <em> next to them indicating a required field
-        required_inputs_tables = tree.xpath(
-            ".//table[tr/td/label[starts-with(@for, 'request') and following-sibling::em]] | "
-            ".//table[tr/td/span[starts-with(@id, 'request') and following-sibling::em]]"
+class Form:
+    def _form_values(self, tree, form_prefix):
+        form_inputs = tree.xpath(
+            f".//table[tr/td/label[starts-with(@for, '{form_prefix}')]]//input[not(@type='hidden')] | "
+            f".//table[tr/td/label[starts-with(@for, '{form_prefix}')]]//textarea | "
+            f".//table[tr/td/span[starts-with(@id, '{form_prefix}')]]//input"
         )
 
-        required_inputs = self._inputs(required_inputs_tables, response.text)
+        form_values = {}
 
-        self.schema = self._generate_schema(required_inputs)
+        for form_input in form_inputs:
+            name = form_input.attrib["name"]
+            is_radio_box = name.rsplit("$", 1)[-1].startswith("RB")
+            if is_radio_box:
+                form_values[name] = "U"
+            else:
+                form_values[name] = ""
+                form_values[f"{name}$State"] = '{"validationState":""}'
 
-        breakpoint()
+        return form_values
 
     def _inputs(self, required_inputs_tables, source_text):
         required_inputs = {}
@@ -580,3 +575,104 @@ class RequestForm:
         jsonschema.Draft7Validator.check_schema(schema)
 
         return schema
+
+
+class RequestForm(Form):
+    def __init__(self, session, request_type):
+        self._session = session
+
+        # come back and fix this request types
+        url = (
+            self._session.url_from_endpoint("RequestOpen.aspx")
+            + f"?rqst={request_type}"
+        )
+        response = self._session.get(url)
+        self._session._check_logged_in(response)
+
+        self.request_url = response.url
+
+        tree = lxml.html.fromstring(response.text)
+
+        # find the table elements that are direct ancestors of labels
+        # that have an <em> next to them indicating a required field
+        required_inputs_tables = tree.xpath(
+            ".//table[tr/td/label[starts-with(@for, 'request') and following-sibling::em]] | "
+            ".//table[tr/td/span[starts-with(@id, 'request') and following-sibling::em]]"
+        )
+
+        self.required_inputs = self._inputs(required_inputs_tables, response.text)
+
+        self.schema = self._generate_schema(self.required_inputs)
+
+        self._payload = self._form_values(tree, "request")
+        self._payload.update(self._session._secrets(tree, response))
+        self._payload["__EVENTTARGET"] = "btnSaveData"
+
+        captcha = Captcha(
+            self._session,
+            tree,
+            "c_requestopen_captchaformlayout_reqstopencaptcha_CaptchaImage",
+            "c_requestopen_captchaformlayout_reqstopencaptcha_SoundLink",
+            "captchaFormLayout$reqstOpenCaptchaTextBox",
+            "BDC_VCID_c_requestopen_captchaformlayout_reqstopencaptcha",
+            "BDC_BackWorkaround_c_requestopen_captchaformlayout_reqstopencaptcha",
+        )
+        self.captcha = captcha.info
+
+        if self.captcha:
+            self.schema["properties"]["captcha"] = {
+                "type": "string",
+                "pattern": "^[A-Z0-9]{4,6}$",
+            }
+            self.schema["required"].append("captcha")
+            self.required_inputs["captcha"] = captcha
+
+    def submit(self, required_inputs):
+        jsonschema.validate(required_inputs, self.schema)
+
+        payload = self._payload.copy()
+        payload.update(
+            {
+                post_key: value
+                for form_key, input_string in required_inputs.items()
+                for post_key, value in self.required_inputs[form_key].fill(input_string)
+            }
+        )
+
+        try:
+            response = self._session.post(self.request_url, data=payload)
+        except scrapelib.HTTPError as error:
+            # Unfortunately, we don't get a clean success page, but if we
+            # get redirected to the Home Page then we have been successful
+            if "CustomerHome.aspx" in error.response.request.url:
+                return True
+            else:
+                raise
+        else:
+            tree = lxml.html.fromstring(response.text)
+
+            form_validation_errors = tree.xpath(
+                '//div[@id="header_errors1"]//li/text()'
+            )
+
+            if not len(form_validation_errors):
+                raise FormValidationError(
+                    "The form did not validate for an unknown reason."
+                )
+
+            if "Email address already exists." in form_validation_errors:
+                raise EmailAlreadyExists(
+                    "The email address already exists in this instance."
+                )
+
+            # reset the captcha and secrets if we want to try again
+            self.captcha = self._captcha(tree)
+            self._payload.update(self._secrets(tree, response))
+
+            if "The submitted code is incorrect." in form_validation_errors:
+                raise IncorrectCaptcha("The submitted captcha was incorrect")
+
+            for error in form_validation_errors:
+                raise FormValidationError(
+                    f'The form did not validate. The website reports this error: "{error}"'
+                )
