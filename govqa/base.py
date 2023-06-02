@@ -19,11 +19,7 @@ from .input_types import (
 
 
 class UnauthenticatedError(RuntimeError):
-    def __init__(self):
-        # Call the base class constructor with the parameters it needs
-        super().__init__(
-            "This method requires authentication, please run the `login` method before calling this method"
-        )
+    pass
 
 
 class FormValidationError(RuntimeError):
@@ -91,7 +87,7 @@ class GovQA(scrapelib.Scraper):
     def new_account_form(self):
         return CreateAccountForm(self)
 
-    def request_form(self, request_type):
+    def request_form(self, request_type=1):
         return RequestForm(self, request_type)
 
     def login(self, username, password):
@@ -111,7 +107,14 @@ class GovQA(scrapelib.Scraper):
             }
         )
 
-        return self.post(response.url, data=payload, allow_redirects=True)
+        response = self.post(response.url, data=payload, allow_redirects=True)
+
+        try:
+            self._check_logged_in(response)
+        except UnauthenticatedError:
+            raise UnauthenticatedError(
+                "Couldn't log in, check your username and password"
+            )
 
     def _secrets(self, tree, response):
         viewstate = tree.xpath("//input[@id='__VIEWSTATE']")[0].value
@@ -284,8 +287,17 @@ class GovQA(scrapelib.Scraper):
         return body
 
     def _check_logged_in(self, response):
-        if "If you have used this service previously, please log in" in response.text:
-            raise UnauthenticatedError
+        if (
+            not (
+                "Logged in as" in response.text
+                or "var loggedInCustomerEmail" in response.text
+            )
+            or "If you have used this service previously, please log in"
+            in response.text
+        ):
+            raise UnauthenticatedError(
+                "This method requires authentication, please run the `login` method before calling this method"
+            )
 
 
 class Form:
@@ -505,6 +517,8 @@ class RequestForm(Form):
             params={"rqst": request_type},
         )
 
+        self._session._check_logged_in(response)
+
         self.request_url = response.url
 
         tree = lxml.html.fromstring(response.text)
@@ -530,18 +544,16 @@ class RequestForm(Form):
             }
         )
 
-        try:
-            response = self._session.post(self.request_url, data=payload)
-        except scrapelib.HTTPError as error:
-            # Unfortunately, we don't get a clean success page, but if we
-            # get redirected to the Home Page then we have been successful
-            if "CustomerHome.aspx" in error.response.request.url:
-                return True
-            else:
-                raise
-        else:
-            tree = lxml.html.fromstring(response.text)
+        response = self._session.post(self.request_url, data=payload)
 
+        tree = lxml.html.fromstring(response.text)
+
+        try:
+            reference_number = tree.xpath(
+                './/span[@id="ConfirmFormLayout_roReferenceNo"]'
+            )[0].text
+            return reference_number
+        except IndexError:
             form_validation_errors = tree.xpath(
                 '//div[@id="header_errors1"]//li/text()'
             )
