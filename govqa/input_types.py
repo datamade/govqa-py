@@ -1,6 +1,6 @@
 import ast
-import re
 import io
+import re
 
 
 class Input:
@@ -27,6 +27,30 @@ class Input:
 class TextArea(Input):
     def _input_element(self, table):
         return table.xpath(".//textarea")[0]
+
+
+class Password(Input):
+    def add_confirmation(self, table):
+        self._form_keys.append(self._input_element(table).name)
+
+
+class Phone(Input):
+    def __init__(self, table, source_text):
+        super().__init__(table, source_text)
+
+        self.properties["pattern"] = "^[0-9]{10}$"
+
+    def fill(self, input_string):
+        results = super().fill(input_string)
+        base_input_name = results[0][0]
+        results.append(
+            (
+                f"{base_input_name}$State",
+                f'{{"rawValue":"{input_string}","validationState":""}}',
+            )
+        )
+
+        return results
 
 
 class ConstrainedInput(Input):
@@ -88,8 +112,11 @@ class ComboBox(ConstrainedInput):
 
 
 class CheckBox(ConstrainedInput):
-    def _valid_values(self):
+    def _valid_values(self, table, source_text):
         return ["U", "C"]
+
+    def _input_element(self, table):
+        return table.xpath(".//input[@type='hidden']")[0]
 
 
 class Captcha:
@@ -97,25 +124,28 @@ class Captcha:
         self,
         session,
         tree,
-        img_id,
-        wav_link_id,
-        input_name,
-        captcha_hash_input_name,
-        workaround_input_name,
+        img_id=None,
+        wav_link_id=None,
+        input_name=None,
+        captcha_hash_input_name=None,
+        workaround_input_name=None,
     ):
         self.info = self._extract(session, tree, img_id, wav_link_id)
         self._form_keys = [input_name]
 
-        captcha_hash_input = tree.xpath(f'//input[@name="{captcha_hash_input_name}"]')
+        if self.info:
+            captcha_hash_input = tree.xpath(
+                f'//input[@name="{captcha_hash_input_name}"]'
+            )
 
-        workaround_input_name = (
-            "BDC_BackWorkaround_c_requestopen_captchaformlayout_reqstopencaptcha"
-        )
+            workaround_input_name = (
+                "BDC_BackWorkaround_c_requestopen_captchaformlayout_reqstopencaptcha"
+            )
 
-        self._payload = [
-            (captcha_hash_input_name, captcha_hash_input[0].value),
-            (workaround_input_name, "1"),
-        ]
+            self._payload = [
+                (captcha_hash_input_name, captcha_hash_input[0].value),
+                (workaround_input_name, "1"),
+            ]
 
     def _extract(self, session, tree, img_id, wav_link_id):
         info = {}

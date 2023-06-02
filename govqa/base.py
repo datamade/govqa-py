@@ -1,5 +1,3 @@
-import ast
-import io
 import re
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
@@ -8,7 +6,16 @@ import jsonschema
 import lxml.html
 import scrapelib
 
-from .input_types import CheckBox, ComboBox, Input, RadioGroup, TextArea, Captcha
+from .input_types import (
+    Captcha,
+    CheckBox,
+    ComboBox,
+    Input,
+    Password,
+    Phone,
+    RadioGroup,
+    TextArea,
+)
 
 
 class UnauthenticatedError(RuntimeError):
@@ -281,36 +288,18 @@ class GovQA(scrapelib.Scraper):
             raise UnauthenticatedError
 
 
-class CreateAccountForm:
-    def __init__(self, session):
-        self._session = session
+class Form:
+    def _process_inputs(self, required_inputs_tables, tree, response):
+        self.required_inputs = self._inputs(required_inputs_tables, response.text)
 
-        response = self._create_account_page()
-        self.account_creation_page = response.request.url
+        self.schema = self._generate_schema(self.required_inputs)
 
-        tree = lxml.html.fromstring(response.text)
-
-        # find the table elements that are direct ancestors of labels
-        # that have an <em> next to them indicating a required field,
-        # and then find the non-hidden inputs descendants of those
-        # tables
-        required_inputs = tree.xpath(
-            ".//table[tr/td/label[starts-with(@for, 'customer') and following-sibling::em]]//input[not(@type='hidden')]"
-        )
-
-        required_inputs += tree.xpath(
-            ".//table[tr/td/span[starts-with(@id, 'customer') and following-sibling::em]]//input"
-        )
-
-        self.schema = self._generate_schema(required_inputs, response)
-        self._post_keys = self._generate_post_keys(required_inputs)
-
-        self._payload = self._secrets(tree, response)
-        self._payload.update(self._form_values(tree))
+        self._payload = self._form_values(tree, "request")
+        self._payload.update(self._session._secrets(tree, response))
         self._payload["__EVENTTARGET"] = "btnSaveData"
-        self._payload["customerInfo$hiddenPasswordChanged"] = "1"
 
-        self.captcha = self._captcha(tree)
+        captcha = Captcha(self._session, tree, **self._captcha_config)
+        self.captcha = captcha.info
 
         if self.captcha:
             self.schema["properties"]["captcha"] = {
@@ -318,38 +307,84 @@ class CreateAccountForm:
                 "pattern": "^[A-Z0-9]{4,6}$",
             }
             self.schema["required"].append("captcha")
-            self._post_keys["captcha"] = "captchaFormLayout$CaptchaCodeTextBox"
-            self._payload[
-                "BDC_BackWorkaround_c_customerdetails_captchaformlayout_captcha"
-            ] = 1
+            self.required_inputs["captcha"] = captcha
 
-    def _generate_schema(self, required_inputs, response):
-        properties = {}
-        for element in required_inputs:
-            try:
-                label = element.attrib["aria-label"].lower().replace(" ", "_")
-            except KeyError:
-                label = element.attrib["name"]
-            properties[label] = {"type": "string"}
-            if element.attrib.get("role") == "combobox":
-                pattern = rf"'uniqueID':'{re.escape(label)}\$DDD\$L'(?:[^}}]+}})+[^}}]+?'itemsInfo':(\[[^\]]*?\])"
+    def _reset_payload(self, tree, response):
+        captcha = Captcha(self._session, tree, **self._captcha_config)
+        self.captcha = captcha.info
+        if "captcha" in self.required_inputs:
+            self.required_inputs["captcha"] = captcha
+        self._payload.update(self._session._secrets(tree, response))
 
-                matches = re.search(pattern, response.text)
-                options = ast.literal_eval(matches.group(1))
-                properties[label]["enum"] = [option["value"] for option in options[1:]]
+    def _form_values(self, tree, form_prefix):
+        form_inputs = tree.xpath(
+            f".//table[tr/td/label[starts-with(@for, '{form_prefix}')]]//input[not(@type='hidden')] | "
+            f".//table[tr/td/label[starts-with(@for, '{form_prefix}')]]//textarea | "
+            f".//table[tr/td/span[starts-with(@id, '{form_prefix}')]]//input"
+        )
 
-            elif element.getparent().getparent().attrib.get("role") == "checkbox":
-                properties[label]["enum"] = ["U", "C"]
+        form_values = {}
 
-        # we'll handle duplicating the password elsewhere
-        properties.pop("confirm_password")
+        for form_input in form_inputs:
+            name = form_input.attrib["name"]
+            is_radio_box = name.rsplit("$", 1)[-1].startswith("RB")
+            if is_radio_box:
+                form_values[name] = "U"
+            else:
+                form_values[name] = ""
+                form_values[f"{name}$State"] = '{"validationState":""}'
 
-        if "phone" in properties:
-            properties["phone"] = {
-                "type": "string",
-                "pattern": "^[0-9]{10}$",
-            }
+        return form_values
 
+    def _inputs(self, required_inputs_tables, source_text):
+        required_inputs = {}
+
+        is_password = False
+        password = None
+        confirm_password_table = None
+
+        for table in required_inputs_tables:
+            if table.xpath(".//input[@role='combobox']"):
+                klass = ComboBox
+            elif table.xpath(".//textarea"):
+                klass = TextArea
+            elif table.xpath(".//table[@role='radiogroup']"):
+                klass = RadioGroup
+            elif table.xpath(".//span[@role='checkbox']"):
+                klass = CheckBox
+            elif table.xpath(
+                ".//input[@name='customerInfo$CustomerFormLayout$txtPhoneMask']"
+            ):
+                klass = Phone
+            elif table.xpath(
+                ".//input[@name='customerInfo$CustomerFormLayout$txtPassword']"
+            ):
+                is_password = True
+                klass = Password
+            elif table.xpath(
+                ".//input[@name='customerInfo$CustomerFormLayout$txtConfirmPassword']"
+            ):
+                # we'll handle the confirm-password inputs in the password input
+                confirm_password_table = table
+                continue
+            else:
+                klass = Input
+
+            input_element = klass(table, source_text)
+            required_inputs[input_element.label] = input_element
+            if is_password:
+                password = input_element
+                is_password = False
+
+        if confirm_password_table is not None:
+            password.add_confirmation(confirm_password_table)
+
+        return required_inputs
+
+    def _generate_schema(self, required_inputs):
+        properties = {
+            key: element.properties for key, element in required_inputs.items()
+        }
         schema = {
             "type": "object",
             "properties": properties,
@@ -361,87 +396,48 @@ class CreateAccountForm:
 
         return schema
 
-    def _generate_post_keys(self, required_inputs):
-        post_keys = {}
-        for element in required_inputs:
-            try:
-                label = element.attrib["aria-label"].lower().replace(" ", "_")
-            except KeyError:
-                label = element.attrib["name"]
-            post_keys[label] = [element.attrib["name"]]
-            if element.attrib.get("role") == "combobox":
-                post_keys[label].append(
-                    element.xpath('../../..//input[@type="hidden"]')[0].name
-                )
 
-        return post_keys
+class CreateAccountForm(Form):
+    _captcha_config = {
+        "img_id": "c_customerdetails_captchaformlayout_captcha_CaptchaImage",
+        "wav_link_id": "c_customerdetails_captchaformlayout_captcha_SoundLink",
+        "input_name": "captchaFormLayout$CaptchaCodeTextBox",
+        "captcha_hash_input_name": "BDC_VCID_c_customerdetails_captchaformlayout_captcha",
+        "workaround_input_name": "BDC_BackWorkaround_c_customerdetails_captchaformlayout_captcha",
+    }
 
-    def _secrets(self, tree, response):
-        payload = self._session._secrets(tree, response)
+    def __init__(self, session):
+        self._session = session
 
-        captcha_hash_input = tree.xpath(
-            '//input[@id="BDC_VCID_c_customerdetails_captchaformlayout_captcha"]'
+        response = self._create_account_page()
+        self.account_creation_page = response.request.url
+
+        tree = lxml.html.fromstring(response.text)
+
+        # find the table elements that are direct ancestors of labels
+        # that have an <em> next to them indicating a required field
+        required_inputs_tables = tree.xpath(
+            ".//table[tr/td/label[starts-with(@for, 'customer') and following-sibling::em]] | "
+            ".//table[tr/td/span[starts-with(@id, 'customer') and following-sibling::em]]"
         )
 
-        if captcha_hash_input:
-            payload[
-                "BDC_VCID_c_customerdetails_captchaformlayout_captcha"
-            ] = captcha_hash_input[0].value
+        self._process_inputs(required_inputs_tables, tree, response)
 
-        return payload
-
-    def _form_values(self, tree):
-        form_inputs = tree.xpath(
-            ".//table[tr/td/label[starts-with(@for, 'customer')]]//input[not(@type='hidden')] | "
-            ".//table[tr/td/label[starts-with(@for, 'customer')]]//textarea | "
-            ".//table[tr/td/span[starts-with(@id, 'customer')]]//input"
+    def _create_account_page(self):
+        response = self._session.get(
+            self._session.url_from_endpoint("Login.aspx"), allow_redirects=True
         )
 
-        form_values = {}
+        tree = lxml.html.fromstring(response.text)
 
-        for form_input in form_inputs:
-            name = form_input.attrib["name"]
-            form_values[name] = ""
-            form_values[f"{name}$State"] = '{"validationState":""}'
+        (create_user_link,) = tree.xpath("//a[@id='lnkCreateUser']")
 
-        return form_values
+        response = self._session.get(
+            self._session.url_from_endpoint(create_user_link.attrib["href"]),
+            allow_redirects=True,
+        )
 
-    def _captcha(self, tree):
-        captcha_info = {}
-
-        try:
-            (captcha_img,) = tree.xpath(
-                '//img[@id="c_customerdetails_captchaformlayout_captcha_CaptchaImage"]'
-            )
-        except ValueError:
-            captcha_jpeg = None
-        else:
-            captcha_jpeg = io.BytesIO(
-                self._session.get(
-                    self._session.domain + captcha_img.attrib["src"]
-                ).content
-            )
-
-        if captcha_jpeg:
-            captcha_info["jpeg"] = captcha_jpeg
-
-        try:
-            (captcha_wav_link,) = tree.xpath(
-                '//a[@id="c_customerdetails_captchaformlayout_captcha_SoundLink"]'
-            )
-        except ValueError:
-            captcha_wav = None
-        else:
-            captcha_wav = io.BytesIO(
-                self._session.get(
-                    self._session.domain + captcha_wav_link.attrib["href"]
-                ).content
-            )
-
-        if captcha_wav:
-            captcha_info["wav"] = captcha_wav
-
-        return captcha_info
+        return response
 
     def submit(self, required_inputs):
         jsonschema.validate(required_inputs, self.schema)
@@ -449,21 +445,11 @@ class CreateAccountForm:
         payload = self._payload.copy()
         payload.update(
             {
-                post_key: v
-                for k, v in required_inputs.items()
-                for post_key in self._post_keys[k]
+                post_key: value
+                for form_key, input_string in required_inputs.items()
+                for post_key, value in self.required_inputs[form_key].fill(input_string)
             }
         )
-        payload[self._post_keys["confirm_password"][0]] = required_inputs["password"]
-
-        if "phone" in required_inputs:
-            payload[
-                "customerInfo$CustomerFormLayout$txtPhoneMask$State"
-            ] = f'{{"rawValue":"{required_inputs["phone"]}","validationState":""}}'
-
-        payload[
-            "customerInfo$CustomerFormLayout$cf_2$State"
-        ] = '{"rawValue":"","validationState":""}'
 
         try:
             response = self._session.post(self.account_creation_page, data=payload)
@@ -491,9 +477,7 @@ class CreateAccountForm:
                     "The email address already exists in this instance."
                 )
 
-            # reset the captcha and secrets if we want to try again
-            self.captcha = self._captcha(tree)
-            self._payload.update(self._secrets(tree, response))
+            self._reset_payload(tree, response)
 
             if "The submitted code is incorrect." in form_validation_errors:
                 raise IncorrectCaptcha("The submitted captcha was incorrect")
@@ -503,91 +487,23 @@ class CreateAccountForm:
                     f'The form did not validate. The website reports this error: "{error}"'
                 )
 
-    def _create_account_page(self):
-        response = self._session.get(
-            self._session.url_from_endpoint("Login.aspx"), allow_redirects=True
-        )
-
-        tree = lxml.html.fromstring(response.text)
-
-        (create_user_link,) = tree.xpath("//a[@id='lnkCreateUser']")
-
-        response = self._session.get(
-            self._session.url_from_endpoint(create_user_link.attrib["href"]),
-            allow_redirects=True,
-        )
-
-        return response
-
-
-class Form:
-    def _form_values(self, tree, form_prefix):
-        form_inputs = tree.xpath(
-            f".//table[tr/td/label[starts-with(@for, '{form_prefix}')]]//input[not(@type='hidden')] | "
-            f".//table[tr/td/label[starts-with(@for, '{form_prefix}')]]//textarea | "
-            f".//table[tr/td/span[starts-with(@id, '{form_prefix}')]]//input"
-        )
-
-        form_values = {}
-
-        for form_input in form_inputs:
-            name = form_input.attrib["name"]
-            is_radio_box = name.rsplit("$", 1)[-1].startswith("RB")
-            if is_radio_box:
-                form_values[name] = "U"
-            else:
-                form_values[name] = ""
-                form_values[f"{name}$State"] = '{"validationState":""}'
-
-        return form_values
-
-    def _inputs(self, required_inputs_tables, source_text):
-        required_inputs = {}
-
-        for table in required_inputs_tables:
-            if table.xpath(".//input[@role='combobox']"):
-                klass = ComboBox
-            elif table.xpath(".//textarea"):
-                klass = TextArea
-            elif table.xpath(".//table[@role='radiogroup']"):
-                klass = RadioGroup
-            elif table.xpath(".//span[@role='checkbox']"):
-                klass = CheckBox
-            else:
-                klass = Input
-
-            input_element = klass(table, source_text)
-            required_inputs[input_element.label] = input_element
-
-        return required_inputs
-
-    def _generate_schema(self, required_inputs):
-        properties = {
-            key: element.properties for key, element in required_inputs.items()
-        }
-        schema = {
-            "type": "object",
-            "properties": properties,
-            "required": list(properties),
-            "additionalProperties": False,
-        }
-
-        jsonschema.Draft7Validator.check_schema(schema)
-
-        return schema
-
 
 class RequestForm(Form):
+    _captcha_config = {
+        "img_id": "c_requestopen_captchaformlayout_reqstopencaptcha_CaptchaImage",
+        "wav_link_id": "c_requestopen_captchaformlayout_reqstopencaptcha_SoundLink",
+        "input_name": "captchaFormLayout$reqstOpenCaptchaTextBox",
+        "captcha_hash_input_name": "BDC_VCID_c_requestopen_captchaformlayout_reqstopencaptcha",
+        "workaround_input_name": "BDC_BackWorkaround_c_requestopen_captchaformlayout_reqstopencaptcha",
+    }
+
     def __init__(self, session, request_type):
         self._session = session
 
-        # come back and fix this request types
-        url = (
-            self._session.url_from_endpoint("RequestOpen.aspx")
-            + f"?rqst={request_type}"
+        response = self._session.get(
+            self._session.url_from_endpoint("RequestOpen.aspx"),
+            params={"rqst": request_type},
         )
-        response = self._session.get(url)
-        self._session._check_logged_in(response)
 
         self.request_url = response.url
 
@@ -600,32 +516,7 @@ class RequestForm(Form):
             ".//table[tr/td/span[starts-with(@id, 'request') and following-sibling::em]]"
         )
 
-        self.required_inputs = self._inputs(required_inputs_tables, response.text)
-
-        self.schema = self._generate_schema(self.required_inputs)
-
-        self._payload = self._form_values(tree, "request")
-        self._payload.update(self._session._secrets(tree, response))
-        self._payload["__EVENTTARGET"] = "btnSaveData"
-
-        captcha = Captcha(
-            self._session,
-            tree,
-            "c_requestopen_captchaformlayout_reqstopencaptcha_CaptchaImage",
-            "c_requestopen_captchaformlayout_reqstopencaptcha_SoundLink",
-            "captchaFormLayout$reqstOpenCaptchaTextBox",
-            "BDC_VCID_c_requestopen_captchaformlayout_reqstopencaptcha",
-            "BDC_BackWorkaround_c_requestopen_captchaformlayout_reqstopencaptcha",
-        )
-        self.captcha = captcha.info
-
-        if self.captcha:
-            self.schema["properties"]["captcha"] = {
-                "type": "string",
-                "pattern": "^[A-Z0-9]{4,6}$",
-            }
-            self.schema["required"].append("captcha")
-            self.required_inputs["captcha"] = captcha
+        self._process_inputs(required_inputs_tables, tree, response)
 
     def submit(self, required_inputs):
         jsonschema.validate(required_inputs, self.schema)
@@ -660,16 +551,9 @@ class RequestForm(Form):
                     "The form did not validate for an unknown reason."
                 )
 
-            if "Email address already exists." in form_validation_errors:
-                raise EmailAlreadyExists(
-                    "The email address already exists in this instance."
-                )
+            self._reset_payload(tree, payload)
 
-            # reset the captcha and secrets if we want to try again
-            self.captcha = self._captcha(tree)
-            self._payload.update(self._secrets(tree, response))
-
-            if "The submitted code is incorrect." in form_validation_errors:
+            if "The submitted CAPTCHA code is incorrect" in form_validation_errors:
                 raise IncorrectCaptcha("The submitted captcha was incorrect")
 
             for error in form_validation_errors:
