@@ -38,6 +38,24 @@ while not success:
 
 client.login(EMAIL_ADDRESS, PASSWORD)
 
+form = client.request_form(3)
+if form.captcha:
+    with open("out.jpg", "wb") as f:
+        f.write(form.captcha["jpeg"].getbuffer())
+captcha = input("Captcha please: ")
+
+reference_number = form.submit(
+    {
+        "type_of_record_requested": "Employee Information",
+        "describe_the_record_requested": "YOUR_REQUEST_TEXT",
+        "member_of_the_media": "No",
+        "preferred_method_to_receive_record": "Electronic via FOIA Center",
+        "format": "PDF",
+        "captcha": captcha,
+    }
+)
+
+
 # List requests for the authenticated user
 requests = client.list_requests()
 
