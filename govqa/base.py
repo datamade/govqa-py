@@ -34,6 +34,10 @@ class EmailAlreadyExists(FormValidationError):
     pass
 
 
+class UnsupportedSite(RuntimeError):
+    pass
+
+
 class GovQA(scrapelib.Scraper):
     """
     Client for programmatically interacting with GovQA instances.
@@ -47,20 +51,15 @@ class GovQA(scrapelib.Scraper):
     :type password: str
     """
 
-    # do i need this, i don't think so.
-    ENDPOINTS = {
-        "home": "SupportHome.aspx",
-        "login": "Login.aspx",
-        "create_account": "CustomerDetails.aspx",
-        "logged_in_home": "CustomerHome.aspx",
-        "messages": "CustomerIssues.aspx",
-        "message": "RequestEdit.aspx",
-    }
-
     def __init__(self, domain, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.domain = domain.rstrip("/")
+
+        response = self.get(self.url_from_endpoint(""), allow_redirects=True)
+
+        if "supporthome.aspx" not in response.url.lower():
+            raise UnsupportedSite(f"{domain} does not seem to be a valid GovQA site")
 
         self.headers.update(
             {
