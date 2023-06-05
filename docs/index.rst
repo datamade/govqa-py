@@ -46,12 +46,22 @@ Usage
 API
 ===
 
-:class:`GovQA` Object
---------------------------
-
 .. autoclass:: govqa.GovQA
+
+   .. automethod:: new_account_form
+
+   .. automethod:: login		   
+
+   .. automethod:: request_form		   
 
    .. automethod:: list_requests
 
    .. automethod:: get_request
+		   
+.. autoclass:: govqa.base.CreateAccountForm
 
+   .. automethod:: submit
+
+.. autoclass:: govqa.base.RequestForm	       
+
+   .. automethod:: submit
