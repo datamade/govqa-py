@@ -48,7 +48,7 @@ Usage
     captcha = None
     while not success:
         if form.captcha:
-            captcha = input("Capcha please: ")
+            captcha = input("Captcha please: ")
         try:
             success = form.submit(
                 {
