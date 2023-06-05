@@ -6,4 +6,5 @@ from .base import (
     GovQA,
     IncorrectCaptcha,
     UnauthenticatedError,
+    UnsupportedSite,
 )

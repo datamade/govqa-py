@@ -14,6 +14,7 @@ setup(
         "scrapelib",
         "lxml",
         "jsonschema",
+        "python-dateutil",
     ],
     extras_require={
         "dev": ["sphinx", "pytest", "requests-mock", "black", "isort"],

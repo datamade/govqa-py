@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+import dateutil.parser
 from urllib.parse import parse_qs, urlparse
 
 import jsonschema
@@ -45,10 +46,6 @@ class GovQA(scrapelib.Scraper):
     :param domain: Root domain of the GovQA instance to interact with, e.g.,
         https://governorny.govqa.us
     :type domain: str
-    :param username: GovQA username
-    :type username: str
-    :param password: GovQA password
-    :type password: str
     """
 
     def __init__(self, domain, *args, **kwargs):
@@ -84,12 +81,37 @@ class GovQA(scrapelib.Scraper):
         return f"{self.domain}/WEBAPP/_rs/{endpoint}"
 
     def new_account_form(self):
+        """
+        Get form for creating a new account
+
+        :returns: an helper for creating a new account
+        :rtype: CreateAccountForm
+        """
         return CreateAccountForm(self)
 
     def request_form(self, request_type=1):
+        """
+        Get form for creating a new public record request
+
+        :param request_type: Some site have more than one request type (i.e.
+                             commercial vs non-commercial). Indicates which one
+                             you want to use.
+        :type request_type: int
+        :returns: an wrapper for creating a new record request
+        :rtype: RequestForm
+
+        """
         return RequestForm(self, request_type)
 
     def login(self, username, password):
+        """
+        Login into the site
+
+        :param username: user name for thie site
+        :type username: str
+        :param password: password for thie site
+        :type password: str
+        """
         response = self.get(
             self.url_from_endpoint("Login.aspx"),
             allow_redirects=True,
@@ -145,19 +167,13 @@ class GovQA(scrapelib.Scraper):
 
         return payload
 
-    def reset_password(self):
-        ...
-
-    def update_request(self, request_id):
-        ...
-
     def list_requests(self):
         """
         Retrieve the id, reference number, and status of each request
         submitted by the authenticated account.
 
         :return: List of dictionaries, each containing the id,
-            reference number, and status of all requests.
+                 reference number, and status of all requests.
         :rtype: list
 
         """
@@ -193,9 +209,9 @@ class GovQA(scrapelib.Scraper):
         attachments, about a request.
 
         :param request_id: Identifier of the request, i.e., the "id"
-            from a request dictionary returned by
-            list_requests(). N.b., the reference number is not the
-            identifier.
+                           from a request dictionary returned by
+                           list_requests(). N.b., the reference number is not
+                           the identifier.
         :type request_id: int
         :return: Dictionary of request metadata, correspondence, and
             attachments.
@@ -263,16 +279,18 @@ class GovQA(scrapelib.Scraper):
                 url = link.attrib["value"]
                 uploaded_at_str = link.xpath("../../../td[1]/text()")[0].strip()
                 metadata = parse_qs(urlparse(url).query)
+                if "response-content-disposition" in metadata:
+                    content_disposition = metadata["response-content-disposition"][0]
+                    expires = datetime.fromtimestamp(int(metadata["Expires"][0]))
+                elif "rscd" in metadata:
+                    content_disposition = metadata["rscd"][0]
+                    expires = dateutil.parser.parse(metadata["se"][0])
                 request["attachments"].append(
                     {
                         "url": link.attrib["value"],
-                        "content-disposition": metadata["response-content-disposition"][
-                            0
-                        ],
-                        "expires": datetime.fromtimestamp(int(metadata["Expires"][0])),
-                        "uploaded_at": datetime.strptime(
-                            uploaded_at_str, "%m/%d/%Y"
-                        ).date(),
+                        "content-disposition": content_disposition,
+                        "expires": expires,
+                        "uploaded_at": dateutil.parser.parse(uploaded_at_str).date(),
                     }
                 )
 
@@ -290,6 +308,7 @@ class GovQA(scrapelib.Scraper):
             not (
                 "Logged in as" in response.text
                 or "var loggedInCustomerEmail" in response.text
+                or 'title="Logout"' in response.text
             )
             or "If you have used this service previously, please log in"
             in response.text
@@ -311,6 +330,7 @@ class Form:
 
         captcha = Captcha(self._session, tree, **self._captcha_config)
         self.captcha = captcha.info
+        """ docs """
 
         if self.captcha:
             self.schema["properties"]["captcha"] = {
@@ -409,6 +429,18 @@ class Form:
 
 
 class CreateAccountForm(Form):
+    """
+    Wrapper for interacting with a site's account creation form
+
+    Attributes:
+       captcha (dict or None): Dictionary of captcha jpeg and wav files as
+                               BytesIO objects, if the the form has a captcha.
+                               Otherwise, captcha has a value of None.
+       schema (dict): A `JSON Schema <https://json-schema.org/>`_ representing
+                      the required fields to create an account and their
+                      format.
+    """
+
     _captcha_config = {
         "img_id": "c_customerdetails_captchaformlayout_captcha_CaptchaImage",
         "wav_link_id": "c_customerdetails_captchaformlayout_captcha_SoundLink",
@@ -451,6 +483,19 @@ class CreateAccountForm(Form):
         return response
 
     def submit(self, required_inputs):
+        """
+        Submit fields to create a new account. If the submission is
+        unsuccessful, the captcha will be refreshed.
+
+        :param required_inputs: dictionary containing the field values for
+                                creating a new account. If the dictionary is
+                                not compatible with the :ref:`schema` then an
+                                informative error will be raised.
+        :type required_inputs: dict
+        :returns: Returns True if account created successfully
+        :rtype: bool
+        """
+
         jsonschema.validate(required_inputs, self.schema)
 
         payload = self._payload.copy()
@@ -500,6 +545,18 @@ class CreateAccountForm(Form):
 
 
 class RequestForm(Form):
+    """
+    Wrapper for interacting with the site's form to submit a new record
+    request.
+
+    Attributes:
+       captcha (dict or None): Dictionary of captcha jpeg and wav files as
+                               BytesIO objects, if the the form has a captcha.
+                               Otherwise, captcha has a value of None.
+       schema (dict): A `JSON Schema <https://json-schema.org/>`_ representing
+                      the required fields to create a new record request.
+    """
+
     _captcha_config = {
         "img_id": "c_requestopen_captchaformlayout_reqstopencaptcha_CaptchaImage",
         "wav_link_id": "c_requestopen_captchaformlayout_reqstopencaptcha_SoundLink",
@@ -532,6 +589,21 @@ class RequestForm(Form):
         self._process_inputs(required_inputs_tables, tree, response)
 
     def submit(self, required_inputs):
+        """
+        Submit fields to create a new record request. If the submission is
+        unsuccessful, the captcha will be refreshed.
+
+        :param required_inputs: dictionary containing the field values for
+                                creating a new record request. If the
+                                dictionary is not compatible with the
+                                :ref:`schema` then an informative error will be
+                                raised.
+        :type required_inputs: dict
+        :returns: Returns the reference number if record request created
+                  successfully
+        :rtype: str
+        """
+
         jsonschema.validate(required_inputs, self.schema)
 
         payload = self._payload.copy()
