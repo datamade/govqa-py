@@ -60,7 +60,7 @@ Usage
             )
         except IncorrectCaptcha:
             pass
-        if captcha:
+        if form.captcha:
             with open("out.jpg", "wb") as f:
                 f.write(form.captcha["jpeg"].getbuffer())
     
@@ -92,7 +92,6 @@ Usage
         # Get details of a specific request
         details = client.get_request(request["id"])
         print(details)
-        break
     
 API
 ===
