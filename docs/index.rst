@@ -67,7 +67,7 @@ Usage
     
     client.login(EMAIL_ADDRESS, PASSWORD)
     
-    form = client.request_form(3)
+    form = client.request_form(request_type=3)
     if form.captcha:
         with open("out.jpg", "wb") as f:
             f.write(form.captcha["jpeg"].getbuffer())
