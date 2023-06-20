@@ -304,15 +304,8 @@ class GovQA(scrapelib.Scraper):
         return body
 
     def _check_logged_in(self, response):
-        if (
-            not (
-                "Logged in as" in response.text
-                or "var loggedInCustomerEmail" in response.text
-                or 'title="Logout"' in response.text
-            )
-            or "If you have used this service previously, please log in"
-            in response.text
-        ):
+        results = re.search('dtrum.identifyUser\("(.*)"\);', response.text).group(1)
+        if not results.split(";")[-1]:
             raise UnauthenticatedError(
                 "This method requires authentication, please run the `login` method before calling this method"
             )
